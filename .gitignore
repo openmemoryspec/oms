@@ -1,0 +1,67 @@
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.editorconfig.local
+
+# Node (for any tooling/validators)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Python (for any tooling/test vectors)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# Rust (for any reference implementations)
+target/
+Cargo.lock
+
+# Go
+*.test
+*.out
+vendor/
+
+# Build / generated output
+out/
+_site/
+.docusaurus/
+.next/
+public/build/
+
+# Temporary & logs
+*.log
+*.tmp
+*.bak
+*.orig
+.cache/
+tmp/
+
+# Secrets
+*.pem
+*.key
+*.p12
+*.pfx
+.env.local
+.env.*.local
+secrets/
