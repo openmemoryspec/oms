@@ -1,7 +1,7 @@
 # Open Memory Specification (OMS)
 ## Memory Grain (.mg) Container Definition
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Standards Track
 **Category:** Data Formats
 **Date:** February 2026
@@ -36,6 +36,9 @@
 21. [Test Vectors](#test-vectors)
 22. [Implementation Notes](#implementation-notes)
 23. [Grain Protection and Invalidation Policy](#grain-protection-and-invalidation-policy)
+24. [Observer Type Registry](#observer-type-registry)
+25. [Observation Mode Registry](#observation-mode-registry)
+26. [Observation Scope Registry](#observation-scope-registry)
 
 ---
 
@@ -360,7 +363,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `relation` | `r` | string | Semantic relationship (RDF predicate) |
 | `object` | `o` | string | Value or target (RDF object) |
 | `confidence` | `c` | float64 | Credibility score [0.0, 1.0] |
-| `source_type` | `st` | string | Provenance origin (open enum). Common values: "user_explicit", "consolidated", "llm_generated", "sensor", "imported", "agent_inferred", "system" |
+| `source_type` | `st` | string | Provenance origin (open enum). Common values: `"user_explicit"`, `"consolidated"`, `"llm_generated"`, `"sensor"`, `"imported"`, `"agent_inferred"`, `"system"`. See note below. |
 | `created_at` | `ca` | int64 | Creation timestamp (epoch ms) |
 | `temporal_type` | `tt` | string | "state" or "observation" |
 | `valid_from` | `vf` | int64 | Temporal validity start (epoch ms) |
@@ -390,6 +393,8 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `invalidation_policy` | `ip` | map | Protection policy governing supersession and contradiction (see §23) |
 | `supersession_justification` | `sj` | string | Required on superseding grain when original has `mode: "soft_locked"` |
 | `supersession_auth` | `sa` | array | COSE signatures authorizing supersession for `mode: "quorum"` |
+
+> **Note — `source_type` for Observation grains:** Use `"sensor"` when `observer_type` is a physical instrument; `"agent_inferred"` when `observer_type` is a cognitive AI observer (`"llm"`, `"reflector"`, `"classifier"`, `"detector"`); `"user_explicit"` for human observers.
 
 ### 6.2 Episode-Specific Fields
 
@@ -426,12 +431,18 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 
 ### 6.6 Observation-Specific Fields
 
-| Full Name | Short Key | Type |
-|-----------|-----------|------|
-| `sensor_id` | `sid` | string |
-| `sensor_type` | `stype` | string |
-| `frame_id` | `fid` | string |
-| `sync_group` | `sg` | string |
+| Full Name | Short Key | Type | Deprecated Full Name (v1.0) | Deprecated Short Key (v1.0) |
+|-----------|-----------|------|-----------------------------|-----------------------------|
+| `observer_id` | `oid` | string | `sensor_id` | `sid` |
+| `observer_type` | `otype` | string | `sensor_type` | `stype` |
+| `frame_id` | `fid` | string | — | — |
+| `sync_group` | `sg` | string | — | — |
+| `observation_mode` | `omode` | string | — (new in v1.1) | — |
+| `observation_scope` | `oscope` | string | — (new in v1.1) | — |
+| `observer_model` | `omdl` | string | — (new in v1.1) | — |
+| `compression_ratio` | `ocmp` | float64 | — (new in v1.1) | — |
+
+**Backward compatibility (v1.1):** Readers MUST accept the deprecated short keys `sid` and `stype` and map them to `observer_id` and `observer_type` respectively. Writers MUST emit `oid` and `otype` and MUST NOT emit `sid` or `stype`. The deprecated aliases will be removed in v2.0. All existing v1.0 Observation grains remain valid under v1.1 readers without any migration of stored data.
 
 ### 6.7 Goal-Specific Fields
 
@@ -660,26 +671,112 @@ Record of tool/function invocation and result.
 
 ### 8.6 Observation
 
-Sensor reading or environmental measurement. Designed for high-volume, time-critical data with spatial context.
+Sensor reading, environmental measurement, or cognitive observation. Captures what an observer — a physical instrument, an AI agent, or a human — perceived at a moment in time, and with what certainty. Designed for high-volume, time-critical data with optional spatial or contextual framing.
+
+**Epistemological note:** An Observation is `"I (observer) perceived X"` — anchored to a specific perceiver, moment, and method. This is distinct from a Fact, which is `"X is true"` — a knowledge claim derived from one or more observations. An LLM that hallucinates can produce a technically valid Observation grain (the observer genuinely produced that output) while the derived Fact is false. Keeping these as separate grain types preserves the full audit chain: `raw input → Observation → Fact → Goal`. See Section 24 for observer type taxonomy.
 
 **Required fields:**
 - `type` = "observation"
-- `sensor_id` (non-empty string)
-- `sensor_type` (non-empty string) — e.g., "lidar", "camera", "imu", "gps", "temperature"
+- `observer_id` (non-empty string) — unique identifier of the observing entity. For physical sensors: device serial number or path (e.g., `"robot-arm-7/lidar-front"`). For AI agents: the agent's DID (e.g., `"did:key:z6Mk..."`). For humans: a pseudonymous or DID-based identifier.
+- `observer_type` (non-empty string) — category of observer. See Observer Type Registry (Section 24). Open enum; applications may define custom values.
 - `created_at` (int64, epoch ms)
 
 **Optional fields:**
-- `subject` (string) — observed entity
-- `object` (string) — observed value/summary
+- `subject` (string) — the entity being observed
+- `object` (string) — the observed value, measurement, or summary
 - `confidence` (float64, [0.0, 1.0])
-- `frame_id` (string) — coordinate reference frame
-- `sync_group` (string) — temporal alignment group for multi-sensor readings
+- `frame_id` (string) — the reference frame for interpreting this observation. For physical observers: spatial coordinate frame (e.g., `"map"`, `"base_link"`, `"odom"`). For cognitive observers: contextual frame such as a thread ID (`"thread:conv-abc123"`), task label, or session identifier. In both cases this field answers: "relative to what context should this observation be interpreted?"
+- `sync_group` (string) — temporal alignment group. All observations sharing a `sync_group` value SHOULD be interpreted together at the same logical moment. For physical: multi-sensor fusion (camera + lidar + IMU at same timestamp). For cognitive: multi-agent concurrent observations of the same event.
 - `namespace` (string, default "shared")
 - `author_did` (string)
 - `importance` (float64, [0.0, 1.0], default 0.3)
 - `structural_tags` (array[string])
-- `content_refs` (array[map]) — for raw data (point clouds, images)
-- `context` (map) — sensor-specific metadata
+- `content_refs` (array[map]) — references to raw data: point clouds, images, audio recordings, conversation transcripts
+- `context` (map) — observer-specific metadata (sensor calibration parameters, model prompt configuration, annotation guidelines, etc.)
+- `derived_from` (array[string]) — content addresses of grains consumed to produce this observation; REQUIRED for `observation_mode: "reflective"` to enable full compression provenance tracing
+- `consolidation_level` (int, [0, 3]) — maps onto observer hierarchy: 0=raw single reading, 1=frequency-aggregated, 2=pattern-distilled, 3=longitudinal sequence
+- `valid_from`, `valid_to` (int64, epoch ms) — for `observation_mode: "reflective"`, these describe the real-world window that was observed, not the moment the grain was written
+- `provenance_chain` (array[map]) — derivation trail; use method strings from Section 14.1
+- `observation_mode` (string enum) — how the observation was made. See Observation Mode Registry (Section 25). Valid values: `"passive"`, `"active"`, `"reflective"`, `"real_time"`. Default: absent.
+- `observation_scope` (string enum) — temporal breadth of what was observed. See Observation Scope Registry (Section 26). Valid values: `"point"`, `"interval"`, `"session"`, `"longitudinal"`. Default: absent (`"point"` implied for physical observers).
+- `observer_model` (string) — for AI observers: the model or software version identifier. RECOMMENDED when `observer_type` is `"llm"`, `"reflector"`, `"classifier"`, or `"detector"`. Example: `"claude-sonnet-4-6"`, `"gpt-4o"`, `"yolov8n"`. Absent for physical observer types.
+- `compression_ratio` (float64) — for aggregating observers with `observation_mode: "reflective"`: the ratio of input content volume to output content volume. Computed as `input_tokens / output_tokens` or `input_bytes / output_bytes`. A value of `12.4` means the observer compressed 12.4×. Provides trust calibration signal: higher compression implies more aggressive summarization and potentially lower fidelity. Absent for point observers.
+
+**Example — physical sensor:**
+```json
+{
+  "type": "observation",
+  "observer_id": "robot-arm-7/lidar-front",
+  "observer_type": "lidar",
+  "subject": "obstacle",
+  "object": "2.3m at bearing 045°",
+  "confidence": 0.97,
+  "frame_id": "base_link",
+  "sync_group": "scan_000412",
+  "observation_mode": "active",
+  "observation_scope": "point",
+  "created_at": 1737000000000,
+  "namespace": "robotics:arm-7",
+  "source_type": "sensor"
+}
+```
+
+**Example — cognitive observer (LLM, reflective, interval-scoped):**
+```json
+{
+  "type": "observation",
+  "observer_id": "did:key:z6MkLLMObserverAgent...",
+  "observer_type": "llm",
+  "observer_model": "claude-sonnet-4-6",
+  "subject": "user:alice",
+  "object": "Building a Next.js app with Supabase auth, deadline in 1 week. Prefers TypeScript. Currently blocked on OAuth callback configuration.",
+  "confidence": 0.85,
+  "observation_mode": "reflective",
+  "observation_scope": "interval",
+  "compression_ratio": 12.4,
+  "frame_id": "thread:conv-abc123",
+  "valid_from": 1736993000000,
+  "valid_to": 1737000000000,
+  "created_at": 1737000001000,
+  "derived_from": ["a1b2c3d4...", "e5f6a7b8...", "c9d0e1f2..."],
+  "consolidation_level": 1,
+  "source_type": "agent_inferred",
+  "namespace": "app:alice",
+  "user_id": "alice",
+  "provenance_chain": [
+    {"source_hash": "a1b2c3d4...", "method": "llm_observation", "weight": 0.4},
+    {"source_hash": "e5f6a7b8...", "method": "llm_observation", "weight": 0.35},
+    {"source_hash": "c9d0e1f2...", "method": "llm_observation", "weight": 0.25}
+  ]
+}
+```
+
+**Example — human observer:**
+```json
+{
+  "type": "observation",
+  "observer_id": "did:key:z6MkDrJones...",
+  "observer_type": "human",
+  "subject": "patient:p-987",
+  "object": "Patient appears anxious, reports intermittent chest pain rated 7/10. Diaphoretic. Reports onset 3 hours ago.",
+  "confidence": 0.91,
+  "observation_mode": "passive",
+  "observation_scope": "point",
+  "created_at": 1737000000000,
+  "namespace": "clinical:ward-3",
+  "user_id": "patient:p-987",
+  "structural_tags": ["phi:clinical_observation", "phi:vital_signs"],
+  "source_type": "user_explicit",
+  "context": {"encounter_id": "enc-55123", "observation_setting": "emergency_department"}
+}
+```
+
+**Design rationale — why Observation is not collapsed into Fact:**
+The Observation type must remain distinct from Fact for four reasons:
+1. **Observer accountability:** `observer_id` + `observer_type` + `observer_model` enables per-observer reliability scoring at query time without payload deserialization. Miscalibrated sensors or high-hallucination AI observers can be batch-penalized or re-evaluated.
+2. **Multi-observer consensus:** `sync_group` enables fusing N concurrent observations into a consensus Fact. This pattern has no clean analog in the Fact triple structure.
+3. **Raw-vs-derived separation:** Observations are epistemically raw; Facts are derived claims. Keeping them separate enables re-deriving Facts from raw Observations after updating a model, and rolling back Facts when supporting Observations are discredited.
+4. **O(1) header routing:** The `0x06` type byte enables routing physical-sensor Observations to time-series stores and cognitive Observations to vector+relational stores without deserialization.
 
 ### 8.7 Goal
 
@@ -919,6 +1016,14 @@ The hash covers the **value bytes only** — the field name (key) is not include
 | `delegate_to` | Yes | May reveal agent architecture |
 | `delegate_from` | Yes | May reveal agent architecture |
 | `rollback_on_failure` | Yes | May reveal system control flow |
+| `observer_id` | Yes | May reveal physical sensor topology or agent infrastructure identity |
+| `observer_type` | No | Core routing and trust-domain field; receiver must know observer category to calibrate confidence |
+| `observer_model` | Yes | May reveal internal AI stack or model versioning |
+| `observation_mode` | No | Required for trust calibration; changes the interpretation of `confidence` |
+| `observation_scope` | No | Required for temporal interpretation of `valid_from`/`valid_to` |
+| `compression_ratio` | No | Required for confidence calibration; cannot assess fidelity without knowing compression factor |
+| `frame_id` | Yes | May reveal spatial coordinate topology or internal contextual system architecture |
+| `sync_group` | Yes | May reveal multi-sensor or multi-agent coordination topology |
 
 ### 10.3 Elision in .mg Format
 
@@ -1179,6 +1284,17 @@ Each entry has:
 - `method` — consolidation method or source type
 - `weight` — how much this source contributed (0.0–1.0)
 
+**Provenance chain method strings for Observation grains (v1.1):**
+
+| Method String | Meaning |
+|---|---|
+| `"sensor_read"` | Direct physical measurement from an instrument |
+| `"llm_observation"` | LLM-generated observation from input messages or documents |
+| `"reflective_compression"` | Observation produced by compressing prior Observation or Episode grains |
+| `"multi_sensor_fusion"` | Observation produced by fusing multiple physical sensor readings sharing a `sync_group` |
+| `"human_annotation"` | Observation recorded by a human observer or annotator |
+| `"detection_inference"` | Observation produced by a classification or detection model |
+
 ### 14.2 Related-To Cross-Links
 
 The `related_to` field enables semantic similarity links:
@@ -1300,6 +1416,7 @@ Implementations MUST declare which level they support:
 - Support all 7 memory types
 - Ignore unknown fields
 - Constant-time hash comparison
+- **v1.1:** MUST accept deprecated short keys `sid` and `stype` in Observation grains and map them to `observer_id` and `observer_type` respectively
 
 Level 1 is sufficient for reading, verifying, and storing grains.
 
@@ -1316,6 +1433,9 @@ All Level 1 requirements, plus:
 - Implement `supersede` as a distinct, atomic store operation (not a raw `put` + index patch); `put` MUST reject grains containing `derived_from` claims that imply supersession without going through `supersede`
 - Apply fail-closed rule: unknown `invalidation_policy.mode` values MUST be treated as `mode: "locked"`
 - Enforce the `replaces` non-supersession rule: `relation_type: "replaces"` MUST NOT trigger index mutations on the target grain
+- **v1.1:** MUST validate that `observer_type` is a non-empty string; MUST NOT reject unknown `observer_type` values (open enum)
+- **v1.1:** MUST emit `oid` and `otype` short keys; MUST NOT emit deprecated `sid` or `stype`
+- **v1.1:** SHOULD warn (but MUST NOT reject) when `observer_model` is absent on Observation grains where `observer_type` is `"llm"`, `"reflector"`, `"classifier"`, or `"detector"`
 
 ### 17.3 Level 3: Production Store
 
@@ -1329,6 +1449,7 @@ All Level 2 requirements, plus:
 - Hash-chained audit trail
 - Crash recovery and reconciliation
 - Policy engine with compliance presets
+- **v1.1:** SHOULD partition Observation grain storage by observer domain, inferred from `observer_type`. Physical observer types (see Section 24) SHOULD flow to time-series storage with raw-data retention policies. Cognitive observer types SHOULD flow to vector + relational storage with the same retrieval semantics as Fact grains. Implementations MUST NOT hard-code the domain partition list — treat `observer_type` as an open string and drive routing from configuration or namespace.
 
 ---
 
@@ -1590,8 +1711,8 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 ```json
 {
   "type": "observation",
-  "sensor_id": "temp-sensor-01",
-  "sensor_type": "temperature",
+  "observer_id": "temp-sensor-01",
+  "observer_type": "temperature",
   "subject": "server-room",
   "object": "22.5C",
   "confidence": 0.99,
@@ -1601,6 +1722,8 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
   "author_did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
 }
 ```
+
+**Note:** v1.1 serializers emit short keys `oid` and `otype` for this grain. v1.0 legacy grains using `sid`/`stype` short keys are accepted by v1.1 readers under the backward-compatibility aliasing rule (§6.6).
 
 ### 21.6 Vector 6: Protected Fact with invalidation_policy
 
@@ -1936,6 +2059,23 @@ footer        = 32OCTET  ; SHA-256 checksum
 }
 ```
 
+**Observation-Specific Fields (v1.1):**
+
+```json
+{
+  "oid": "observer_id",
+  "otype": "observer_type",
+  "fid": "frame_id",
+  "sg": "sync_group",
+  "omode": "observation_mode",
+  "oscope": "observation_scope",
+  "omdl": "observer_model",
+  "ocmp": "compression_ratio"
+}
+```
+
+> **Deprecated short keys (v1.0, accepted by readers until v2.0):** `"sid"` → `observer_id`, `"stype"` → `observer_type`
+
 **Goal-Specific Fields:**
 
 ```json
@@ -2034,6 +2174,88 @@ footer        = 32OCTET  ; SHA-256 checksum
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-02-17 | Initial publication — 9-byte fixed header (version 0x01, 2-byte NS hash), canonical serialization, content addressing, seven memory types (incl. Goal 0x07), COSE signing, selective disclosure, .mg container files, W3C DIDs, sensitivity bits, reg: tag vocabulary, provenance, temporal modeling, conformance levels, device profiles |
+| 1.1 | 2026-02-20 | Generalized Observer: renamed `sensor_id`→`observer_id` (short key `sid`→`oid`) and `sensor_type`→`observer_type` (short key `stype`→`otype`); added four new Observation-specific fields (`observation_mode`, `observation_scope`, `observer_model`, `compression_ratio`); generalized `frame_id` and `sync_group` semantics to cover both physical-coordinate and cognitive-context framing; added Observer Type Registry (Section 24), Observation Mode Registry (Section 25), Observation Scope Registry (Section 26); extended elidability table, provenance method strings, and conformance level requirements; deprecated v1.0 short keys `sid`/`stype` with read-only compatibility until v2.0 |
+
+---
+
+## 24. Observer Type Registry
+
+The `observer_type` field on Observation grains is an **open enum**. Applications may define custom values beyond those listed here. Standard values are organized into two domains. Index layers MAY use this field to route physical Observation grains to time-series stores and cognitive Observation grains to vector + relational stores, but MUST NOT hard-code the domain partition list — treat `observer_type` as an open string governed by configuration or namespace.
+
+### 24.1 Physical Observer Domain
+
+Physical observers produce measurements of the material world: geometry, position, temperature, electromagnetic fields, acoustic signals. `source_type` SHOULD be `"sensor"` for grains produced by physical observers.
+
+| Value | Description |
+|---|---|
+| `"lidar"` | 3D laser ranging — time-of-flight or FMCW; produces point clouds |
+| `"camera"` | RGB, depth, stereo, or thermal imaging |
+| `"imu"` | Inertial Measurement Unit — fused gyroscope + accelerometer readings |
+| `"gps"` | Global Positioning System or any GNSS receiver |
+| `"temperature"` | Thermal sensor — thermocouple, thermistor, RTD, infrared |
+| `"pressure"` | Barometric, fluid, or contact pressure sensor |
+| `"accelerometer"` | Linear acceleration sensor (standalone, not fused with gyroscope) |
+| `"magnetometer"` | Magnetic field sensor or digital compass |
+| `"ultrasonic"` | Ultrasonic distance ranging — time-of-flight |
+| `"radar"` | Radio detection and ranging |
+| `"microphone"` | Audio input or acoustic sensor |
+
+### 24.2 Cognitive Observer Domain
+
+Cognitive observers produce observations of the information space: conversations, documents, behaviors, patterns, classifications. `source_type` SHOULD be `"agent_inferred"` for AI-generated cognitive observations and `"user_explicit"` for human observations.
+
+| Value | Description |
+|---|---|
+| `"llm"` | Large Language Model as observer — produces natural language observations from input data. `observer_model` RECOMMENDED. |
+| `"reflector"` | Aggregating or pattern-distilling agent — produces higher-order observations from prior Observation grains. Maps to `consolidation_level` ≥ 2. `observer_model` RECOMMENDED. |
+| `"classifier"` | ML classification model — produces categorical observations (label + confidence score). `observer_model` RECOMMENDED. |
+| `"detector"` | ML detection or anomaly detection model — produces presence/absence or anomaly observations. `observer_model` RECOMMENDED. |
+| `"human"` | Human observer or annotator — records direct perception or expert judgment. `observer_model` MUST be absent. |
+| `"hybrid"` | Combined physical sensor + AI processing pipeline — e.g., camera + vision model producing a semantic label from raw imagery. SHOULD include provenance_chain entries for both sensor reading and inference steps. |
+
+### 24.3 Extensibility
+
+Custom `observer_type` values MUST NOT be identical to any registered value in §24.1 or §24.2. Custom values SHOULD use a namespace prefix, e.g., `"acme:thermal-v2"` or `"myapp:custom-observer"`. Conformant parsers MUST NOT reject unknown `observer_type` values.
+
+---
+
+## 25. Observation Mode Registry
+
+The `observation_mode` field is a **closed enum**. It describes how the observation was produced, which determines how `confidence`, `valid_from`/`valid_to`, and `derived_from` should be interpreted by downstream consumers.
+
+| Value | Meaning | `valid_from`/`valid_to` semantics | Typical `observer_type` |
+|---|---|---|---|
+| `"passive"` | Observer perceived without intervening — watched, listened, read data as it arrived without emitting a signal or query | Covers the duration of passive reception | `"camera"`, `"microphone"`, `"llm"`, `"human"` |
+| `"active"` | Observer actively sampled or probed — emitted a signal, sent a query, asked a question to elicit a response | Marks the precise moment of the probe and its response window | `"lidar"`, `"radar"`, `"ultrasonic"`, `"llm"` |
+| `"reflective"` | Observer processed past data to synthesize — looked back at prior grains, compressed, or reflected. `derived_from` SHOULD be populated with the content addresses of consumed grains. | Spans the window of the consumed input data, **not** the moment the grain was written. `created_at` is the write time; `valid_from`/`valid_to` is the observed window. | `"reflector"`, `"llm"` |
+| `"real_time"` | Observer processed data as it arrived — stream processing with no meaningful buffering. `created_at` ≈ event time. | Point-in-time; `valid_from` ≈ `created_at` | `"imu"`, `"gps"`, `"microphone"`, `"llm"` (streaming inference) |
+
+**Absent:** When `observation_mode` is absent, no mode assertion is made. Consumers SHOULD treat the observation as mode-unclassified and apply conservative trust calibration.
+
+**Interaction with `active` mode:** Grains produced by an active observer SHOULD record the probe or query that triggered the observation in `context["probe"]`. This enables verification that the observed response corresponds to the stated query.
+
+---
+
+## 26. Observation Scope Registry
+
+The `observation_scope` field is a **closed enum**. It describes the temporal breadth of what was observed — how much time the observation covers — enabling correct interpretation of `valid_from`/`valid_to` and appropriate retrieval strategies.
+
+| Value | Temporal Breadth | Physical Example | Cognitive Example |
+|---|---|---|---|
+| `"point"` | Single moment — one reading, one event, one inference | GPS fix at t=T; one temperature sample | Single-message LLM impression; one annotated event |
+| `"interval"` | Defined time window — seconds to tens of minutes | 1-second IMU batch; 10-minute sensor log segment | LLM observer notes compressing the last 30 minutes of conversation |
+| `"session"` | Entire interaction session — minutes to hours | Full robot mission from start to dock | LLM observer notes covering a complete conversation thread |
+| `"longitudinal"` | Across multiple sessions — days, weeks, or longer | Multi-day environmental monitoring log | Reflector cross-session pattern spanning weeks of user interactions |
+
+**Default behavior:**
+- For physical observers, `"point"` is implied when `observation_scope` is absent.
+- For cognitive observers with `observation_mode: "reflective"`, `"interval"` or `"session"` SHOULD be set explicitly. Absent scope on a reflective cognitive observation is a conformance warning at Level 2.
+
+**Interaction with temporal fields:**
+- `"point"` → `valid_from` ≈ `valid_to` ≈ `created_at`; often omitted entirely
+- `"interval"` → `valid_from` < `valid_to`; window is typically much shorter than a session
+- `"session"` → `valid_from` = session start, `valid_to` = session end
+- `"longitudinal"` → `valid_from` = earliest covered session, `valid_to` = latest covered session; `derived_from` SHOULD enumerate the intermediate Observation grains from each covered session
 
 ---
 
