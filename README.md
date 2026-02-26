@@ -1,12 +1,12 @@
 # Open Memory Specification (OMS)
 
-**Version:** 1.0 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
+**Version:** 1.2 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
 
 OMS is an open standard for portable, auditable, and interoperable agent memory across autonomous systems, AI agents, and distributed knowledge networks.
 
 ## What Is OMS?
 
-OMS defines the **Memory Grain (`.mg`) container** — a binary representation for immutable, content-addressed knowledge units called *grains*. A memory grain is the atomic unit of agent knowledge: a single immutable fact, episode, observation, or decision record, identified by the SHA-256 hash of its canonical binary representation.
+OMS defines the **Memory Grain (`.mg`) container** — a binary representation for immutable, content-addressed knowledge units called *grains*. A memory grain is the atomic unit of agent knowledge: a single immutable belief, event, observation, or decision record, identified by the SHA-256 hash of its canonical binary representation.
 
 Think of the `.mg` container as what JSON is to APIs or `.git` objects are to version control — a universal, language-agnostic, self-describing interchange format for agent memory.
 
@@ -24,18 +24,21 @@ Think of the `.mg` container as what JSON is to APIs or `.git` objects are to ve
 | **Decentralized identity** | W3C DIDs — no certificate authority required |
 | **Grain protection** | Invalidation policies restricting supersession rights |
 
-## Memory Types
+## Grain Types
 
-| Type | Byte | Description |
-|------|------|-------------|
-| Fact | `0x01` | Atomic assertion: subject–relation–object triple |
-| Episode | `0x02` | Temporal experience with context and actors |
-| Checkpoint | `0x03` | Agent state snapshot at a point in time |
-| Workflow | `0x04` | Multi-step procedural record |
-| ToolCall | `0x05` | External tool invocation and result |
-| Observation | `0x06` | Sensor or environment reading |
-| Goal | `0x07` | Intent, objective, or desired outcome |
-| `0xF0–0xFF` | — | Application-defined types |
+| Type | Byte | Formerly | Description |
+|------|------|----------|-------------|
+| Belief | `0x01` | Fact | Declarative knowledge: subject–relation–object triple |
+| Event | `0x02` | Episode | Timestamped occurrence: message, interaction, or utterance |
+| State | `0x03` | Checkpoint | Agent state snapshot at a point in time |
+| Workflow | `0x04` | — | Multi-step procedural record |
+| Action | `0x05` | ToolCall | Tool invocation or code execution |
+| Observation | `0x06` | — | Sensor or cognitive input |
+| Goal | `0x07` | — | Intent, objective, or desired outcome |
+| Reasoning | `0x08` | — | Inference chain and thought audit trail |
+| Consensus | `0x09` | — | Multi-agent agreement record |
+| Consent | `0x0A` | — | DID-scoped permission grant or withdrawal |
+| `0xF0–0xFF` | — | — | Application-defined domain profile types |
 
 ## Blob Layout
 
@@ -63,7 +66,7 @@ Think of the `.mg` container as what JSON is to APIs or `.git` objects are to ve
 
 ## Specification
 
-The full specification is in [`oms-specification.md`](./oms-specification.md).
+The full specification is in [`SPECIFICATION.md`](./SPECIFICATION.md).
 
 **Table of Contents:**
 - Blob Layout and Structure
@@ -71,7 +74,7 @@ The full specification is in [`oms-specification.md`](./oms-specification.md).
 - Content Addressing
 - Field Compaction
 - Multi-Modal Content References
-- Memory Types
+- Grain Types
 - Cryptographic Signing
 - Selective Disclosure
 - File Format (`.mg` files)
@@ -81,12 +84,16 @@ The full specification is in [`oms-specification.md`](./oms-specification.md).
 - Temporal Modeling
 - Encoding Options
 - Conformance Levels
-- Device Profiles
 - Error Handling
 - Security Considerations
 - Test Vectors
 - Implementation Notes
 - Grain Protection and Invalidation Policy
+- Observer Type Registry
+- Observation Mode and Scope Registries
+- Grain Type Field Specifications
+- Query Conventions
+- Domain Profile Registry (Healthcare, Legal, Finance, Robotics, Science, Consumer)
 
 ## Conformance Levels
 
