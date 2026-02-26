@@ -1,7 +1,7 @@
 # Open Memory Specification (OMS)
 ## Memory Grain (.mg) Container Definition
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Standards Track
 **Category:** Data Formats
 **Date:** February 2026
@@ -20,7 +20,7 @@
 5. [Content Addressing](#content-addressing)
 6. [Field Compaction](#field-compaction)
 7. [Multi-Modal Content References](#multi-modal-content-references)
-8. [Memory Types](#memory-types)
+8. [Grain Types](#grain-types)
 9. [Cryptographic Signing](#cryptographic-signing)
 10. [Selective Disclosure](#selective-disclosure)
 11. [File Format (.mg files)](#file-format-mg-files)
@@ -39,6 +39,15 @@
 24. [Observer Type Registry](#observer-type-registry)
 25. [Observation Mode Registry](#observation-mode-registry)
 26. [Observation Scope Registry](#observation-scope-registry)
+27. [Grain Type Field Specifications](#grain-type-field-specifications)
+28. [Query Conventions](#query-conventions)
+- [Appendix A: Domain Profile Registry](#appendix-a-domain-profile-registry)
+- [Appendix B: ABNF Grammar](#appendix-b-abnf-grammar)
+- [Appendix C: Field Mapping Table](#appendix-c-field-mapping-table-compact-reference)
+- [Appendix D: Compliance Mapping](#appendix-d-compliance-mapping)
+- [Appendix E: Version History](#appendix-e-version-history)
+- [Appendix F: Glossary](#appendix-f-glossary)
+- [Appendix G: Complete Example Grain](#appendix-g-complete-example-grain)
 
 ---
 
@@ -164,23 +173,26 @@ Hexadecimal values are lowercase. Byte sequences are represented in hex with spa
 | 5 | `cbor_encoding` | Payload is CBOR instead of MessagePack |
 | 6-7 | `sensitivity` | Classification: 00=public, 01=internal, 10=pii, 11=phi |
 
-**Byte 2 — Type (memory type enum):**
+**Byte 2 — Type (cognitive grain type):**
 
-| Value | Type |
-|-------|------|
-| 0x01 | Fact |
-| 0x02 | Episode |
-| 0x03 | Checkpoint |
-| 0x04 | Workflow |
-| 0x05 | ToolCall |
-| 0x06 | Observation |
-| 0x07 | Goal |
-| 0x08-0xEF | Reserved for future standard types |
-| 0xF0-0xFF | Application-defined types |
+| Value | Type | Description |
+|-------|------|-------------|
+| 0x01 | **Belief** | Structured belief — (subject, relation, object) triple with confidence and source |
+| 0x02 | **Event** | Timestamped occurrence — message, interaction, or behavioral event |
+| 0x03 | **State** | Agent state snapshot — portable save point |
+| 0x04 | **Workflow** | Learned action sequence — procedural memory |
+| 0x05 | **Action** | Tool invocation or code execution |
+| 0x06 | **Observation** | Raw sensory or cognitive input |
+| 0x07 | **Goal** | Objective with lifecycle semantics |
+| 0x08 | **Reasoning** | Inference chain and thought audit trail |
+| 0x09 | **Consensus** | Multi-agent agreement record |
+| 0x0A | **Consent** | Permission grant or withdrawal — DID-scoped, purpose-bounded |
+| 0x0B–0xEF | Reserved | Future standard types |
+| 0xF0–0xFF | Domain profile types | Application-defined per Appendix A domain profiles |
 
 **Bytes 3-4 — Namespace Hash:** First two bytes of SHA-256(namespace), encoded as `uint16` big-endian. Provides 65,536 routing buckets without deserialization. Full namespace string remains authoritative in payload. This field is a routing hint only and MUST NOT be used for security decisions (see §13.3, §20).
 
-**Bytes 5-8 — Created-at:** `uint32` epoch seconds (1970-01-01 onwards). Range: 1970 to 2106. Full millisecond precision in payload field.
+**Bytes 5-8 — Created-at:** `uint32` epoch seconds (1970-01-01 onwards). Range: 1970 to 2106. The `created_at` header field is a **coarse routing hint only** — for TTL and time-range indexing. It MUST NOT be used as the authoritative event timestamp. Authoritative timestamps belong in the payload (`timestamp_ms` field). Full millisecond precision available via `timestamp_ms` (§6.1).
 
 ### 3.2 Byte Order
 
@@ -348,6 +360,27 @@ The content address includes `created_at_sec` from the fixed header (bytes 5–8
 
 **Implication for deduplication:** Content-address deduplication applies only to byte-identical blobs (same payload encoded at the same creation second). For semantic deduplication — the same fact written at different times — use `superseded_by` to mark the older grain as replaced, or `derived_from` to express provenance. The phrase "identical content maps to same address" (§5.4) means byte-identical, including the creation timestamp.
 
+### 5.6 Immutability Boundary
+
+A grain has two distinct layers with different mutability guarantees:
+
+| Layer | Contents | Mutability | Covered by content address | Covered by COSE signature |
+|-------|----------|------------|---------------------------|--------------------------|
+| **Blob** | 9-byte fixed header + MessagePack/CBOR payload | **Immutable** — once written, never modified | Yes | Yes |
+| **Index** | Status and access-tracking fields (§28.3) | **Mutable** — updated by the store/index layer | No | No |
+
+**A grain's content is the immutable blob identified by its content address. A grain's status is maintained in the index layer.** Index-layer fields — `superseded_by`, `system_valid_to`, `verification_status`, `access_count`, `last_accessed_at` — are NOT part of the hashed blob bytes and are NOT covered by COSE signatures. They are managed exclusively by the store after initial write (see §28.3 for update rules).
+
+This separation is fundamental to the OMS architecture:
+
+1. **Integrity** — the content address guarantees the blob is unchanged. Index-layer mutations cannot alter a grain's identity or tamper with signed content.
+2. **Lifecycle** — grains can be superseded, retracted, or verified without rewriting the original blob or invalidating its signature.
+3. **Access tracking** — read counters and timestamps can be updated without breaking content addressing.
+
+Implementations MUST store index-layer fields outside the .mg blob — in a database index, sidecar metadata, or equivalent external structure. Writers MUST NOT embed index-layer fields in the blob payload; stores MUST NOT recompute content addresses when index-layer fields change.
+
+**Portability:** When grains are exported as .mg files, index-layer state is carried in the optional **index manifest** (§11.7). This preserves the "one file, full memory" principle — a .mg file contains both the immutable grain blobs and their current lifecycle state.
+
 ---
 
 ## 6. Field Compaction
@@ -393,17 +426,49 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `invalidation_policy` | `ip` | map | Protection policy governing supersession and contradiction (see §23) |
 | `supersession_justification` | `sj` | string | Required on superseding grain when original has `mode: "soft_locked"` |
 | `supersession_auth` | `sa` | array | COSE signatures authorizing supersession for `mode: "quorum"` |
+| `owner` | `own` | map | LegalEntity map (§12.5.1) — legal entity with rights and liabilities over the agent |
+| `category` | `cat` | uint8 | Routing category within the grain type — see §27 Category Registry |
+| `run_id` | `rid` | string | Session or run identifier — scopes grain to a specific agent execution. Distinct from `user_id` (data subject) and `namespace` (logical partition). |
+| `role` | `role` | string | Message role for Event grains — open enum, standard values: `"user"`, `"assistant"`, `"system"`, `"tool"` |
+| `access_count` | `ac` | int | Number of times this grain has been retrieved — updated by the store on reads, not by the writer. Enables recency/frequency scoring. |
+| `last_accessed_at` | `laa` | int64 | Epoch ms of most recent retrieval — updated by the store on reads. Pair with `access_count` for importance decay models. |
+| `timestamp_ms` | `tms` | int64 | High-precision payload timestamp (epoch ms). The authoritative event timestamp. The header's `created_at_sec` is a coarse routing hint only. |
+| `observer_did` | `obsdid` | string | DID of the entity that observed or measured — distinct from `author_did` (who wrote the grain into the store). |
+| `subject_did` | `sdid` | string | DID of the entity this grain is **about** — distinct from `user_id` (GDPR data subject) and `author_did` (writer). |
+| `session_id` | `sid2` | string | Session scope — distinct from `run_id` (execution scope) and `user_id` (data subject). |
+| `entity_id` | `eid` | string | External entity reference — product ID, patient MRN, vehicle chassis ID, instrument serial. Not a DID; opaque to the spec. |
+| `epistemic_status` | `epstat` | string | Categorical certainty: `"certain"`, `"probable"`, `"uncertain"`, `"estimated"`, `"derived"`. Complements the continuous `confidence` float. Open enum. |
+| `verification_status` | `vstatus` | string | Values: `"unverified"` (default), `"verified"`, `"contested"`, `"retracted"`. |
+| `requires_human_review` | `rhr` | bool | If `true`, this grain's content MUST NOT drive automated decisions until a human has reviewed and cleared it. Binding for Reasoning grains; advisory for others. |
+| `processing_basis` | `pbasis` | string | Content address of the Consent grain that authorized this grain's creation. Used to compute erasure scope on consent revocation. |
+| `identity_state` | `idst` | string | Identity resolution state: `"anonymous"`, `"pseudonymous"`, `"authenticated"`. Affects personalization logic and compliance scope. |
+| `license` | `lic` | string | SPDX license identifier for the grain's content. Example: `"CC-BY-4.0"`, `"CC0-1.0"`, `"proprietary"`. |
+| `trusted_timestamp` | `tts` | map | RFC 3161 timestamp token: `{tsp_response: bytes, tsa_uri: string}`. Legally defensible creation time from an accredited TSA, independent of self-reported `created_at`. |
+| `invalidation_type` | `itype` | string | Semantic reason for supersession: `"superseded"`, `"retraction"`, `"erratum"`, `"corrigendum"`, `"retraction_with_replacement"`, `"expression_of_concern"`. Set by actor creating the superseding grain. |
+| `invalidation_reason` | `ireason` | string | Human-readable rationale for `invalidation_type`. |
+| `invalidation_initiator` | `iinit` | string | DID of the party initiating the invalidation. |
+| `retention_policy` | `rpol` | map | Minimum retention requirements: `{minimum_retention_years: int, regulation: string, deletion_requires: string}`. Distinct from `invalidation_policy` (which controls supersession). |
+| `recall_priority` | `rpri` | string | Retrieval priority hint: `"hot"`, `"warm"`, `"cold"`. Guides index layer storage tier selection. |
 
 > **Note — `source_type` for Observation grains:** Use `"sensor"` when `observer_type` is a physical instrument; `"agent_inferred"` when `observer_type` is a cognitive AI observer (`"llm"`, `"reflector"`, `"classifier"`, `"detector"`); `"user_explicit"` for human observers.
 
-### 6.2 Episode-Specific Fields
+> **Index-layer fields (§5.6, §28.3):** The following fields in the table above are **not stored in the immutable .mg blob**. They are maintained by the store/index layer and are excluded from the content address and COSE signature: `superseded_by`, `system_valid_to`, `verification_status`, `access_count`, `last_accessed_at`. Writers MUST NOT set these fields; see §28.3 for store update rules.
 
-| Full Name | Short Key | Type |
-|-----------|-----------|------|
-| `content` | `content` | string |
-| `consolidated` | `consolidated` | bool |
+### 6.2 Event-Specific Fields
 
-### 6.3 Checkpoint-Specific Fields
+| Full Name | Short Key | Type | Notes |
+|-----------|-----------|------|-------|
+| `content` | `content` | string | Raw text of the event. MAY be omitted if `content_blocks` is present. |
+| `consolidated` | `consolidated` | bool | Whether this event has been distilled into Belief grains |
+| `content_blocks` | `cblocks` | array[map] | Typed content blocks for structured LLM messages. When present, takes precedence over flat `content` string. Each entry: `{type: "text"/"image"/"tool_use"/"tool_result"/"thinking", ...}`. See note below. |
+| `model_id` | `mdl` | string | LLM model identifier that produced the response (e.g., `"claude-opus-4-6"`, `"gpt-4o"`). Absent for human-authored events. |
+| `stop_reason` | `stopr` | string | Why LLM generation stopped: `"end_turn"`, `"max_tokens"`, `"stop_sequence"`, `"tool_use"`. Open enum. |
+| `token_usage` | `toku` | map | Token consumption: `{input_tokens: int, output_tokens: int, cache_creation_tokens: int, cache_read_tokens: int}`. Enables cost tracking. |
+| `parent_message_id` | `pmid` | string | Content address of the preceding message grain in the conversation thread. Enables linked-list message threading and conversation branching (two Event grains sharing the same `parent_message_id` represent a branch point). |
+
+> **Note — `content_blocks` schema:** Each block in the array MUST contain a `type` field. Standard block types mirror the Anthropic Messages API: `"text"` (`{type, text}`), `"image"` (`{type, source}`), `"tool_use"` (`{type, id, name, input}`), `"tool_result"` (`{type, tool_use_id, content, is_error}`), `"thinking"` (`{type, thinking}`). Implementations MAY define additional block types. When `content_blocks` is present and `content` is also present, `content` serves as a plain-text fallback for readers that do not support structured blocks.
+
+### 6.3 State-Specific Fields
 
 | Full Name | Short Key | Type |
 |-----------|-----------|------|
@@ -417,32 +482,45 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `steps` | `steps` | array[string] |
 | `trigger` | `trigger` | string |
 
-### 6.5 ToolCall-Specific Fields
+### 6.5 Action-Specific Fields
 
-| Full Name | Short Key | Type |
-|-----------|-----------|------|
-| `tool_name` | `tn` | string |
-| `arguments` | `args` | map |
-| `result` | `res` | any |
-| `success` | `ok` | bool |
-| `error` | `err` | string |
-| `duration_ms` | `dur` | int |
-| `parent_task_id` | `ptid` | string |
+| Full Name | Short Key | Type | Notes |
+|-----------|-----------|------|-------|
+| `action_phase` | `aphase` | string | Discriminator: `"definition"` \| `"call"` \| `"result"` \| absent = complete |
+| `tool_name` | `tn` | string | |
+| `input` | `inp` | map | Canonical name for tool arguments (replaces `arguments`) |
+| `content` | `cnt` | any | Canonical name for tool result (replaces `result`) |
+| `is_error` | `iserr` | bool | Canonical error flag (replaces `success`) |
+| `tool_call_id` | `tcid` | string | Anthropic/MCP correlation ID; links result phase to call phase |
+| `call_batch_id` | `cbid` | string | Groups parallel calls issued in the same agent turn |
+| `tool_type` | `ttype` | string | `"client"` \| `"server"` \| `"builtin"` |
+| `tool_version` | `tver` | string | For versioned builtins, e.g. `"web_search_20250305"` |
+| `execution_mode` | `emode` | string | `"function_call"` \| `"code_exec"` \| `"computer_use"` |
+| `code` | `code` | string | Executable code for `execution_mode: "code_exec"` (CodeAct) |
+| `stdout` | `out` | string | Standard output from code execution |
+| `stderr` | `err2` | string | Standard error from code execution |
+| `exit_code` | `xc` | int | Process exit code from code execution |
+| `interpreter_id` | `iid` | string | Links Action grains sharing a stateful interpreter session |
+| `error` | `err` | string | Error message (use with `is_error: true`) |
+| `error_type` | `etype` | string | Structured error classification: `"timeout"`, `"rate_limit"`, `"auth_failure"`, `"invalid_input"`, `"server_error"`, `"not_found"`, `"quota_exceeded"`. Open enum. Enables retry policy decisions without parsing free-text `error`. |
+| `duration_ms` | `dur` | int | Execution time in milliseconds |
+| `parent_task_id` | `ptid` | string | Content address of parent task grain |
+| `tool_description` | `tdesc` | string | Human-readable description of the tool (definition phase) |
+| `input_schema` | `isch` | map | JSON Schema for tool inputs; mirrors Anthropic `input_schema` / MCP `inputSchema` (definition phase) |
+| `strict` | `strict` | bool | If `true`, model guarantees strict JSON Schema conformance for `input` (definition phase) |
 
 ### 6.6 Observation-Specific Fields
 
-| Full Name | Short Key | Type | Deprecated Full Name (v1.0) | Deprecated Short Key (v1.0) |
-|-----------|-----------|------|-----------------------------|-----------------------------|
-| `observer_id` | `oid` | string | `sensor_id` | `sid` |
-| `observer_type` | `otype` | string | `sensor_type` | `stype` |
-| `frame_id` | `fid` | string | — | — |
-| `sync_group` | `sg` | string | — | — |
-| `observation_mode` | `omode` | string | — (new in v1.1) | — |
-| `observation_scope` | `oscope` | string | — (new in v1.1) | — |
-| `observer_model` | `omdl` | string | — (new in v1.1) | — |
-| `compression_ratio` | `ocmp` | float64 | — (new in v1.1) | — |
-
-**Backward compatibility (v1.1):** Readers MUST accept the deprecated short keys `sid` and `stype` and map them to `observer_id` and `observer_type` respectively. Writers MUST emit `oid` and `otype` and MUST NOT emit `sid` or `stype`. The deprecated aliases will be removed in v2.0. All existing v1.0 Observation grains remain valid under v1.1 readers without any migration of stored data.
+| Full Name | Short Key | Type |
+|-----------|-----------|------|
+| `observer_id` | `oid` | string |
+| `observer_type` | `otype` | string |
+| `frame_id` | `fid` | string |
+| `sync_group` | `sg` | string |
+| `observation_mode` | `omode` | string |
+| `observation_scope` | `oscope` | string |
+| `observer_model` | `omdl` | string |
+| `compression_ratio` | `ocmp` | float64 |
 
 ### 6.7 Goal-Specific Fields
 
@@ -464,8 +542,67 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `evidence_required` | `evreq` | int |
 | `rollback_on_failure` | `rof` | array[string] |
 | `allowed_transitions` | `atr` | array[string] |
+| `depends_on` | `depg` | array[string] |
+| `assigned_agent` | `asgn` | string |
+| `expected_output` | `expout` | string |
+| `output_grain` | `outg` | string |
+| `deadline` | `dline` | int64 |
 
-### 6.8 Compaction Rules
+### 6.8 Consent-Specific Fields
+
+> **Note:** `subject_did` (short key `sdid`) is a common field (§6.1) used here as the consenting party. `grantee_did` is Consent-specific.
+
+| Full Name | Short Key | Type |
+|-----------|-----------|------|
+| `grantee_did` | `gdid` | string |
+| `scope` | `scope` | array[string] |
+| `is_withdrawal` | `isw` | bool |
+| `basis` | `basis` | string |
+| `jurisdiction` | `jur` | string |
+| `prior_consent` | `pcon` | string |
+| `witness_dids` | `wdids` | array[string] |
+
+### 6.9 Reasoning-Specific Fields
+
+| Full Name | Short Key | Type |
+|-----------|-----------|------|
+| `premises` | `prem` | array[string] |
+| `conclusion` | `conc` | string |
+| `inference_method` | `imethod` | string |
+| `alternatives_considered` | `altc` | array[map] |
+| `thinking_content` | `think` | string |
+| `thinking_redacted` | `tredact` | bool |
+| `statistical_context` | `statctx` | map |
+| `software_environment` | `swenv` | map |
+| `parameter_set` | `params` | map |
+| `random_seed` | `rseed` | int64 |
+
+### 6.10 Consensus-Specific Fields
+
+| Full Name | Short Key | Type |
+|-----------|-----------|------|
+| `participating_observers` | `pobs` | array[string] |
+| `threshold` | `thold` | int |
+| `agreement_count` | `agcnt` | int |
+| `dissent_count` | `discnt` | int |
+| `dissent_grains` | `disgrn` | array[string] |
+| `agreed_content` | `agcon` | any |
+
+### 6.11 Delegation-Specific Fields
+
+When a Goal or Belief grain uses the `mg:delegates_to` relation, the following fields specify the scope and constraints of the delegation. Without these fields, a delegation is unbounded — the delegatee receives no machine-readable limits. Implementations SHOULD populate delegation scope fields for any inter-agent authority grant.
+
+| Full Name | Short Key | Type | Notes |
+|-----------|-----------|------|-------|
+| `authorized_namespaces` | `ans` | array[string] | Namespaces the delegatee may read and write. `["*"]` = all namespaces (dangerous — SHOULD be avoided). |
+| `authorized_types` | `atypes` | array[uint8] | Grain type bytes the delegatee may create. E.g., `[0x01, 0x02, 0x05]` for Belief, Event, Action. |
+| `authorized_tools` | `atools` | array[string] | Tool names the delegatee may invoke. Empty array = no tool restriction. |
+| `delegation_depth` | `ddepth` | int | Maximum re-delegation depth. 0 = delegatee MUST NOT re-delegate. Absent = unlimited (NOT RECOMMENDED). |
+| `delegation_expiry` | `dexp` | int64 | Epoch ms when delegation expires. After expiry, the delegatee's writes SHOULD be rejected by stores that enforce delegation scope. |
+| `context_grains` | `cgrains` | array[string] | Content addresses of grains to transfer as context to the delegatee. Enables session handoff: the delegator selects which grains the delegatee needs to continue. |
+| `return_to` | `retdid` | string | DID of the agent to return control to after the delegated task completes. |
+
+### 6.12 Compaction Rules
 
 - Serializers MUST replace full field names with short keys before encoding
 - Deserializers MUST replace short keys with full field names after decoding
@@ -523,6 +660,12 @@ Multi-modal content (images, audio, video, embeddings, sensor data) is reference
 | `dimensions` | `dm` | int | REQUIRED | Vector dimensionality |
 | `modality_source` | `ms` | string | OPTIONAL | Source modality: "text", "image", "audio", etc. |
 | `distance_metric` | `di` | string | OPTIONAL | "cosine", "l2", "dot" |
+| `chunk_index` | `ci` | int | OPTIONAL | Position of this chunk within the source grain (0-indexed). When a grain is embedded as a single unit, `chunk_index` = 0. |
+| `chunk_text` | `ct` | string | OPTIONAL | The exact text that was embedded. Enables reconstruction from a vector search hit without re-reading and re-chunking the source grain. |
+| `chunk_strategy` | `cs` | string | OPTIONAL | Chunking method: `"full"` (entire grain), `"sentence"`, `"paragraph"`, `"token_window"`, `"recursive"`, `"semantic"`. Open enum. |
+| `chunk_overlap` | `co` | int | OPTIONAL | Overlap in tokens between adjacent chunks. Absent or 0 for non-overlapping strategies. |
+
+> **Note — RAG round-trip:** When a vector search returns a hit, the `chunk_text` field enables immediate context assembly without a second read of the source grain. The `chunk_index` + `chunk_strategy` fields enable re-chunking validation. Implementations that generate embeddings internally MUST populate `embedding_refs` entries on the grain. Implementations that delegate to an external vector store SHOULD populate `chunk_text` to ensure retrieval provenance is self-contained.
 
 ### 7.3 Modality-Specific Metadata
 
@@ -548,326 +691,189 @@ Multi-modal content (images, audio, video, embeddings, sensor data) is reference
 
 ---
 
-## 8. Memory Types
+## 8. Grain Types
 
-Each grain MUST contain a `type` field indicating its memory type. Seven standard types are defined:
+The `type` byte (Byte 2 of the fixed header) encodes the **cognitive grain type** — the class of knowledge unit this grain represents. Ten standard types are defined.
 
-### 8.1 Fact
+### Standard `mg:` Relation Vocabulary
 
-Structured knowledge claim with confidence and temporal validity. Modeled as semantic triple (subject-relation-object).
+The `mg:` namespace is reserved for standard semantic relations. Applications define custom relations freely outside this namespace.
+
+| Relation | Typical grain type | Meaning |
+|---|---|---|
+| `mg:perceives` | Observation | Raw sensory or cognitive input |
+| `mg:knows` | Belief | Derived belief or learned fact |
+| `mg:said` | Event | Message or utterance |
+| `mg:did` | Action | Tool or action invocation |
+| `mg:infers` | Reasoning | Derived conclusion from prior grains |
+| `mg:agrees_with` | Consensus | Multi-agent threshold agreement |
+| `mg:state_at` | State | Agent state snapshot |
+| `mg:requires_steps` | Workflow | Learned action sequence |
+| `mg:intends` | Goal | Agent objective |
+| `mg:permits` | Consent | User grants agent right to retain or act |
+| `mg:revokes` | Consent | User revokes prior consent |
+| `mg:prohibits` | Belief/Goal | Hard prohibition |
+| `mg:requires` | Belief/Goal | Hard requirement |
+| `mg:prefers` | Belief | Soft preference |
+| `mg:avoids` | Belief | Soft avoidance preference |
+| `mg:delegates_to` | Goal | Scoped authority grant (§6.11 delegation scope) |
+| `mg:owned_by` | Belief | Legal entity ownership (§12.5) |
+| `mg:has_capability` | Belief | Agent capability advertisement (§28.5 Agent Card) |
+| `mg:handed_off_to` | Event | Session handoff event record (§28.7) |
+| `mg:depends_on` | Goal | Task dependency (distinct from `parent_goals` hierarchy) |
+| `mg:assigned_to` | Goal | Task assigned to agent for execution |
+
+### 8.1 Belief (type = 0x01)
+
+A structured belief about the world — a (subject, relation, object) triple with confidence and source. The canonical unit of declarative knowledge.
 
 **Required fields:**
-- `type` = "fact"
+- `type` = "belief" (payload string; header byte = `0x01`)
 - `subject` (non-empty string)
 - `relation` (non-empty string)
-- `object` (non-empty string)
+- `object` (string or map)
 - `confidence` (float64, [0.0, 1.0])
-- `source_type` (non-empty string)
 - `created_at` (int64, epoch ms)
 
-**Optional fields:**
-- `temporal_type` ("state" | "observation", default "observation")
-- `valid_from`, `valid_to` (int64, epoch ms) — when fact was true in real world
-- `system_valid_from`, `system_valid_to` (int64) — when fact was active in system
-- `context` (map string→string) — contextual metadata
-- `superseded_by` (string, content address of superseding grain)
-- `contradicted` (bool, default false)
-- `importance` (float64, [0.0, 1.0], default 0.7)
-- `author_did` (string) — DID of creating agent
-- `namespace` (string, default "shared")
-- `user_id` (string) — data subject identifier
-- `structural_tags` (array[string]) — classification tags
-- `derived_from` (array[string]) — parent content addresses
-- `consolidation_level` (int, [0, 3])
-- `success_count`, `failure_count` (int, non-negative)
-- `origin_did` (string) — original source agent DID
-- `origin_namespace` (string) — original source namespace
-- `provenance_chain` (array[map]) — derivation trail
-- `content_refs` (array[map]) — references to external content
-- `embedding_refs` (array[map]) — references to embeddings
-- `related_to` (array[map]) — cross-links to related grains
-
-**Provenance chain entry:**
-```json
-{
-  "source_hash": "abc123...",
-  "method": "frequency_consolidation",
-  "weight": 0.8
-}
-```
+**Optional fields:** All common fields from §6.1. Type-specific: `temporal_type`, `success_count`, `failure_count`, bi-temporal fields (`valid_from`, `valid_to`, `system_valid_from`, `system_valid_to`).
 
 **RDF mapping:** `<grain:subject> <grain:relation> "grain:object" .`
 
-**Design note:** The Fact type intentionally serves as a broad knowledge representation primitive, accommodating optional fields for temporal validity, bi-temporal system tracking, consolidation history, confidence, and cross-links. This allows simple grains (subject, relation, object, confidence) to coexist with richly annotated ones in the same store without separate type hierarchies. Implementations SHOULD populate only the fields appropriate to their use case and treat unused optional fields as absent. Future versions may introduce specialized types for semantic patterns (e.g., goals, learned models) that require distinct lifecycle semantics not expressible as Fact optional fields.
+### 8.2 Event (type = 0x02)
 
-### 8.2 Episode
-
-Raw, unstructured interaction record. Episodes are input to consolidation, which extracts structured Facts.
+A raw, timestamped record of something that happened — a message, interaction, utterance, or behavioral occurrence.
 
 **Required fields:**
-- `type` = "episode"
-- `content` (non-empty string) — raw text of episode
+- `type` = "event"
+- `content` (non-empty string) — raw text. MAY be omitted if `subject`/`relation`/`object` fully describe the event.
 - `created_at` (int64, epoch ms)
 
-**Optional fields:**
-- `user_id` (string)
-- `author_did` (string)
-- `namespace` (string, default "shared")
-- `importance` (float64, [0.0, 1.0], default 0.5)
-- `consolidated` (bool, default false)
-- `structural_tags` (array[string])
-- `content_refs` (array[map])
+**Optional fields:** `role` (`"user"`, `"assistant"`, `"system"`, `"tool"`), `content_blocks` (array[map] — structured multi-block content; takes precedence over flat `content`), `model_id` (string), `stop_reason` (string), `token_usage` (map), `parent_message_id` (string — content address of preceding message for conversation threading), `consolidated` (bool), `run_id` (string), `session_id` (string), all common fields.
 
-### 8.3 Checkpoint
+### 8.3 State (type = 0x03)
 
-Agent state snapshot for save/restore.
+An agent state snapshot — the portable save point at a moment in time.
 
 **Required fields:**
-- `type` = "checkpoint"
-- `context` (map) — agent state snapshot
+- `type` = "state"
+- `context` (map) — agent state snapshot. For Letta-compatible agents, SHOULD include `memory_blocks`, `system_prompt`, `tools`, `model`.
 - `created_at` (int64, epoch ms)
 
-**Optional fields:**
-- `plan` (array[string]) — planned actions
-- `history` (array[map]) — action history
-- `user_id` (string)
-- `structural_tags` (array[string])
+**Optional fields:** `plan` (array[string]), `history` (array[map]), all common fields.
 
-### 8.4 Workflow
+### 8.4 Workflow (type = 0x04)
 
-Procedural memory — learned sequence of actions.
+Learned action sequence — procedural memory for recurring tasks.
 
 **Required fields:**
 - `type` = "workflow"
-- `steps` (non-empty array[string])
-- `trigger` (non-empty string)
+- `steps` (non-empty array[string]) — ordered action steps
+- `trigger` (non-empty string) — condition that activates this workflow
 - `created_at` (int64, epoch ms)
 
-**Optional fields:**
-- `importance` (float64, [0.0, 1.0], default 0.7)
-- `namespace` (string, default "shared")
+**Optional fields:** All common fields.
 
-### 8.5 ToolCall
+### 8.5 Action (type = 0x05)
 
-Record of tool/function invocation and result.
+A record of a tool invocation, code execution, or computer-use action. See §27.1 for the full `action_phase` discriminator and field tables.
 
 **Required fields:**
-- `type` = "tool_call"
-- `tool_name` (non-empty string)
-- `arguments` (map)
-- `result` (any MessagePack-serializable value)
-- `success` (bool)
+- `type` = "action"
+- Phase-dependent required fields (see §27.1)
 - `created_at` (int64, epoch ms)
 
-**Optional fields:**
-- `error` (string) — error message if success=false
-- `duration_ms` (int) — execution time
-- `author_did` (string)
-- `user_id` (string)
-- `namespace` (string, default "shared")
-- `parent_task_id` (string) — parent task content address
-- `structural_tags` (array[string])
-- `content_refs` (array[map])
+### 8.6 Observation (type = 0x06)
 
-### 8.6 Observation
-
-Sensor reading, environmental measurement, or cognitive observation. Captures what an observer — a physical instrument, an AI agent, or a human — perceived at a moment in time, and with what certainty. Designed for high-volume, time-critical data with optional spatial or contextual framing.
-
-**Epistemological note:** An Observation is `"I (observer) perceived X"` — anchored to a specific perceiver, moment, and method. This is distinct from a Fact, which is `"X is true"` — a knowledge claim derived from one or more observations. An LLM that hallucinates can produce a technically valid Observation grain (the observer genuinely produced that output) while the derived Fact is false. Keeping these as separate grain types preserves the full audit chain: `raw input → Observation → Fact → Goal`. See Section 24 for observer type taxonomy.
+Raw sensory or cognitive input — what an observer perceived at a moment in time.
 
 **Required fields:**
 - `type` = "observation"
-- `observer_id` (non-empty string) — unique identifier of the observing entity. For physical sensors: device serial number or path (e.g., `"robot-arm-7/lidar-front"`). For AI agents: the agent's DID (e.g., `"did:key:z6Mk..."`). For humans: a pseudonymous or DID-based identifier.
-- `observer_type` (non-empty string) — category of observer. See Observer Type Registry (Section 24). Open enum; applications may define custom values.
+- `observer_id` (non-empty string) — unique identifier of the observing entity
+- `observer_type` (non-empty string) — open enum, see §24
 - `created_at` (int64, epoch ms)
 
-**Optional fields:**
-- `subject` (string) — the entity being observed
-- `object` (string) — the observed value, measurement, or summary
-- `confidence` (float64, [0.0, 1.0])
-- `frame_id` (string) — the reference frame for interpreting this observation. For physical observers: spatial coordinate frame (e.g., `"map"`, `"base_link"`, `"odom"`). For cognitive observers: contextual frame such as a thread ID (`"thread:conv-abc123"`), task label, or session identifier. In both cases this field answers: "relative to what context should this observation be interpreted?"
-- `sync_group` (string) — temporal alignment group. All observations sharing a `sync_group` value SHOULD be interpreted together at the same logical moment. For physical: multi-sensor fusion (camera + lidar + IMU at same timestamp). For cognitive: multi-agent concurrent observations of the same event.
-- `namespace` (string, default "shared")
-- `author_did` (string)
-- `importance` (float64, [0.0, 1.0], default 0.3)
-- `structural_tags` (array[string])
-- `content_refs` (array[map]) — references to raw data: point clouds, images, audio recordings, conversation transcripts
-- `context` (map) — observer-specific metadata (sensor calibration parameters, model prompt configuration, annotation guidelines, etc.)
-- `derived_from` (array[string]) — content addresses of grains consumed to produce this observation; REQUIRED for `observation_mode: "reflective"` to enable full compression provenance tracing
-- `consolidation_level` (int, [0, 3]) — maps onto observer hierarchy: 0=raw single reading, 1=frequency-aggregated, 2=pattern-distilled, 3=longitudinal sequence
-- `valid_from`, `valid_to` (int64, epoch ms) — for `observation_mode: "reflective"`, these describe the real-world window that was observed, not the moment the grain was written
-- `provenance_chain` (array[map]) — derivation trail; use method strings from Section 14.1
-- `observation_mode` (string enum) — how the observation was made. See Observation Mode Registry (Section 25). Valid values: `"passive"`, `"active"`, `"reflective"`, `"real_time"`. Default: absent.
-- `observation_scope` (string enum) — temporal breadth of what was observed. See Observation Scope Registry (Section 26). Valid values: `"point"`, `"interval"`, `"session"`, `"longitudinal"`. Default: absent (`"point"` implied for physical observers).
-- `observer_model` (string) — for AI observers: the model or software version identifier. RECOMMENDED when `observer_type` is `"llm"`, `"reflector"`, `"classifier"`, or `"detector"`. Example: `"claude-sonnet-4-6"`, `"gpt-4o"`, `"yolov8n"`. Absent for physical observer types.
-- `compression_ratio` (float64) — for aggregating observers with `observation_mode: "reflective"`: the ratio of input content volume to output content volume. Computed as `input_tokens / output_tokens` or `input_bytes / output_bytes`. A value of `12.4` means the observer compressed 12.4×. Provides trust calibration signal: higher compression implies more aggressive summarization and potentially lower fidelity. Absent for point observers.
+**Optional fields:** `observer_model`, `frame_id`, `sync_group`, `observation_mode`, `observation_scope`, `compression_ratio`, all common fields.
 
-**Example — physical sensor:**
-```json
-{
-  "type": "observation",
-  "observer_id": "robot-arm-7/lidar-front",
-  "observer_type": "lidar",
-  "subject": "obstacle",
-  "object": "2.3m at bearing 045°",
-  "confidence": 0.97,
-  "frame_id": "base_link",
-  "sync_group": "scan_000412",
-  "observation_mode": "active",
-  "observation_scope": "point",
-  "created_at": 1737000000000,
-  "namespace": "robotics:arm-7",
-  "source_type": "sensor"
-}
-```
+### 8.7 Goal (type = 0x07)
 
-**Example — cognitive observer (LLM, reflective, interval-scoped):**
-```json
-{
-  "type": "observation",
-  "observer_id": "did:key:z6MkLLMObserverAgent...",
-  "observer_type": "llm",
-  "observer_model": "claude-sonnet-4-6",
-  "subject": "user:alice",
-  "object": "Building a Next.js app with Supabase auth, deadline in 1 week. Prefers TypeScript. Currently blocked on OAuth callback configuration.",
-  "confidence": 0.85,
-  "observation_mode": "reflective",
-  "observation_scope": "interval",
-  "compression_ratio": 12.4,
-  "frame_id": "thread:conv-abc123",
-  "valid_from": 1736993000000,
-  "valid_to": 1737000000000,
-  "created_at": 1737000001000,
-  "derived_from": ["a1b2c3d4...", "e5f6a7b8...", "c9d0e1f2..."],
-  "consolidation_level": 1,
-  "source_type": "agent_inferred",
-  "namespace": "app:alice",
-  "user_id": "alice",
-  "provenance_chain": [
-    {"source_hash": "a1b2c3d4...", "method": "llm_observation", "weight": 0.4},
-    {"source_hash": "e5f6a7b8...", "method": "llm_observation", "weight": 0.35},
-    {"source_hash": "c9d0e1f2...", "method": "llm_observation", "weight": 0.25}
-  ]
-}
-```
-
-**Example — human observer:**
-```json
-{
-  "type": "observation",
-  "observer_id": "did:key:z6MkDrJones...",
-  "observer_type": "human",
-  "subject": "patient:p-987",
-  "object": "Patient appears anxious, reports intermittent chest pain rated 7/10. Diaphoretic. Reports onset 3 hours ago.",
-  "confidence": 0.91,
-  "observation_mode": "passive",
-  "observation_scope": "point",
-  "created_at": 1737000000000,
-  "namespace": "clinical:ward-3",
-  "user_id": "patient:p-987",
-  "structural_tags": ["phi:clinical_observation", "phi:vital_signs"],
-  "source_type": "user_explicit",
-  "context": {"encounter_id": "enc-55123", "observation_setting": "emergency_department"}
-}
-```
-
-**Design rationale — why Observation is not collapsed into Fact:**
-The Observation type must remain distinct from Fact for four reasons:
-1. **Observer accountability:** `observer_id` + `observer_type` + `observer_model` enables per-observer reliability scoring at query time without payload deserialization. Miscalibrated sensors or high-hallucination AI observers can be batch-penalized or re-evaluated.
-2. **Multi-observer consensus:** `sync_group` enables fusing N concurrent observations into a consensus Fact. This pattern has no clean analog in the Fact triple structure.
-3. **Raw-vs-derived separation:** Observations are epistemically raw; Facts are derived claims. Keeping them separate enables re-deriving Facts from raw Observations after updating a model, and rolling back Facts when supporting Observations are discredited.
-4. **O(1) header routing:** The `0x06` type byte enables routing physical-sensor Observations to time-series stores and cognitive Observations to vector+relational stores without deserialization.
-
-### 8.7 Goal
-
-Explicit objective set by a human or inferred by an agent. Goals have lifecycle semantics (active → satisfied | failed | suspended) that are distinct from Fact confidence revisions. Each state transition creates a new immutable grain; the supersession chain carries the transition history.
-
-**Why not Fact with `relation="has_goal"`:** At scale, querying active goals via Fact requires full payload deserialization to inspect the `relation` field. A dedicated type byte enables O(1) header-level filtering before any MessagePack decode. Goal state (`goal_state`) is a first-class indexable field, not buried in a `context` map.
+An explicit objective with lifecycle semantics. Goals transition through states via the supersession chain.
 
 **Required fields:**
 - `type` = "goal"
-- `subject` (non-empty string) — agent or entity this goal belongs to
-- `description` (non-empty string) — natural language statement of the objective
-- `goal_state` (string, enum) — one of: `"active"`, `"satisfied"`, `"failed"`, `"suspended"`
-- `source_type` (non-empty string) — `"user_explicit"`, `"agent_inferred"`, `"system"`, `"consolidated"` (typical values for Goal grains; see §6.1 for full open enum). Required (not optional) because human-vs-agent origin is a first-class routing concern.
+- `description` (non-empty string)
+- `goal_state` (string enum) — `"active"`, `"satisfied"`, `"failed"`, `"suspended"`
 - `created_at` (int64, epoch ms)
 
-**Optional fields (Goal-specific):**
-- `criteria` (array[string]) — semi-structured success conditions, human-readable and LLM-evaluable: `["p99_latency_ms < 100", "error_rate < 0.001"]`
-- `criteria_structured` (array[map]) — machine-evaluable criteria (see schema below)
-- `priority` (int, [1, 5]) — 1=critical, 5=low. Integer not float for discrete scheduling.
-- `parent_goals` (array[string]) — content addresses of parent Goal grains; supports DAG hierarchy (multiple parents)
-- `state_reason` (string) — audit rationale for the current state transition
-- `satisfaction_evidence` (array[string]) — content addresses of ToolCall, Fact, or Observation grains that substantiate a `satisfied` transition
-- `progress` (float64, [0.0, 1.0]) — agent-assessed progress; subjective estimate, not mechanically derived from criteria
-- `delegate_to` (string) — DID of agent to whom this goal is delegated
-- `delegate_from` (string) — content address of the grain that originated the delegation
-- `expiry_policy` (string, enum) — `"hard"` (fail if `valid_to` exceeded), `"soft"` (suspend), `"extend"` (agent may extend `valid_to`)
-- `recurrence` (string) — cron-like recurrence expression for recurring goals
-- `evidence_required` (int) — minimum number of grains in `satisfaction_evidence` required before `satisfied` transition is valid
-- `rollback_on_failure` (array[string]) — content addresses of Workflow or ToolCall grains to execute on `failed` transition
-- `allowed_transitions` (array[string]) — goal state transitions the agent may execute autonomously without satisfying `invalidation_policy`; valid values: `"satisfied"`, `"failed"`, `"suspended"`, `"active"`. Absent on a protected goal means all transitions require policy authorization.
-- `invalidation_policy` (map) — protection policy restricting who may supersede this goal or set `contradicted=true`; see §23. **Note on goal laundering:** An agent MUST NOT use `satisfied` transitions to escape a protected goal's constraints. Protected goals with `"satisfied"` in `allowed_transitions` SHOULD include `satisfaction_evidence` references; stores MAY enforce `evidence_required > 0` for such goals.
+**Optional fields:** `criteria`, `criteria_structured`, `priority`, `parent_goals`, `depends_on` (array[string] — content addresses of prerequisite Goal grains that must complete before this one starts; distinct from `parent_goals` which implies decomposition, not dependency ordering), `assigned_agent` (string — DID of the agent assigned to execute this task), `expected_output` (string — description of expected output format), `output_grain` (string — content address of the grain containing the task's completed output), `deadline` (int64 — epoch ms hard deadline for task completion), `state_reason`, `satisfaction_evidence`, `progress`, `delegate_to`, `delegate_from`, `expiry_policy`, `recurrence`, `evidence_required`, `rollback_on_failure`, `allowed_transitions`, all common fields.
 
-**Optional fields (inherited from core):**
-- `confidence` (float64, [0.0, 1.0]) — certainty the goal is correctly understood
-- `importance` (float64, [0.0, 1.0])
-- `author_did` (string)
-- `user_id` (string) — data subject (GDPR scope for human-set goals)
-- `namespace` (string, default "shared")
-- `valid_from` (int64, epoch ms) — when the goal activates
-- `valid_to` (int64, epoch ms) — deadline
-- `superseded_by` (string) — content address of next state grain in the transition chain
-- `derived_from` (array[string]) — parent content addresses
-- `provenance_chain` (array[map]) — who set this goal and by what method
-- `related_to` (array[map]) — cross-links to relevant Facts, Episodes, or other Goals
-- `structural_tags` (array[string])
-- `embedding_refs` (array[map]) — for semantic similarity search across goals
-- `context` (map string→string)
+Constraints, policies, and delegations are expressed as Goal or Belief grains with `mg:prohibits`, `mg:prefers`, `mg:avoids`, or `mg:delegates_to` relations, combined with `invalidation_policy` (§23) for enforcement.
 
-**`criteria_structured` entry schema:**
-```json
-{
-  "metric": "p99_latency_ms",
-  "operator": "lt",
-  "threshold": 100,
-  "window_ms": 300000,
-  "measurement_ns": "monitoring:metrics"
-}
-```
+> **Note — plan-and-execute agents:** The `depends_on` field enables DAG-structured task dependency graphs for hierarchical task decomposition. Agents using plan-and-execute patterns (e.g., LangGraph StateGraph, CrewAI task dependencies) SHOULD express task ordering via `depends_on` and task hierarchy via `parent_goals`. A Goal grain with `depends_on` references MUST NOT transition to `goal_state: "active"` until all referenced Goal grains have `goal_state: "satisfied"`. The `assigned_agent` field enables multi-agent task routing: the orchestrator creates Goal grains with `assigned_agent` pointing to worker agent DIDs.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `metric` | string | REQUIRED | Metric identifier to evaluate |
-| `operator` | string | REQUIRED | Comparison: `"lt"`, `"gt"`, `"lte"`, `"gte"`, `"eq"`, `"neq"` |
-| `threshold` | number | REQUIRED | Comparison value |
-| `window_ms` | int | OPTIONAL | Measurement evaluation window in milliseconds |
-| `measurement_ns` | string | OPTIONAL | Namespace or system to query for the metric |
+### 8.8 Reasoning (type = 0x08)
 
-**State transition via supersession chain:**
+An inference step or thought chain — what the agent considered, concluded, and rejected. Enables audit trails for high-stakes decisions.
 
-```
-G1 (active):  goal_state="active",  derived_from=[]
-G2 (suspended): goal_state="suspended", derived_from=[<hash-G1>],
-                provenance_chain=[{source_hash:<hash-G1>, method:"goal_state_transition", weight:1.0}],
-                state_reason="Higher priority goal preempted"
-G3 (satisfied): goal_state="satisfied", derived_from=[<hash-G2>],
-                satisfaction_evidence=[<toolcall-hash>, <observation-hash>],
-                state_reason="All criteria verified"
-```
+**Required fields:**
+- `type` = "reasoning"
+- `created_at` (int64, epoch ms)
 
-The index layer fills in `superseded_by` on prior grains after new state grains are written, following the same pattern as `system_valid_to` in §15.3.
+**Optional fields:**
+- `premises` (array[string]) — content addresses of grains that informed this reasoning
+- `conclusion` (string) — the conclusion reached
+- `inference_method` (string) — `"deductive"`, `"inductive"`, `"abductive"`, `"analogical"`
+- `alternatives_considered` (array[map]) — rejected hypotheses, each: `{hypothesis: string, rejection_reason: string}`
+- `thinking_content` (string) — raw thinking/reasoning trace from the LLM's extended thinking feature (e.g., Anthropic `thinking` blocks). Distinct from `conclusion` (the output) and `premises` (the inputs). This is the primary audit artifact.
+- `thinking_redacted` (bool) — if `true`, the LLM's thinking was present but redacted before storage (e.g., for compliance or IP protection). The `thinking_content` field will be absent or contain a placeholder.
+- `requires_human_review` (bool) — if `true`, MUST NOT drive automated decisions until cleared
+- `statistical_context` (map) — `{p_value: float, confidence_interval: [float, float], effect_size: float, sample_size: int}`
+- `software_environment` (map) — `{language: string, runtime_version: string, library_versions: map, os: string}`
+- `parameter_set` (map) — model parameters or hyperparameters used
+- `random_seed` (int64) — for reproducibility
+- All common fields from §6.1
 
-**Provenance chain methods for Goal grains:**
+### 8.9 Consensus (type = 0x09)
 
-| Method string | Meaning |
-|--------------|---------|
-| `"user_input"` | Human set this goal directly |
-| `"goal_decomposition"` | Agent broke a parent goal into sub-goals |
-| `"goal_state_transition"` | This grain updates the state of a prior Goal grain |
-| `"goal_revision"` | Human modified a previously set goal |
-| `"goal_inference"` | Agent inferred a goal from Episode or Fact patterns |
-| `"goal_delegation"` | Goal was delegated from another agent |
+A multi-agent agreement record — N observers voted on a shared claim, threshold was met (or not).
+
+**Required fields:**
+- `type` = "consensus"
+- `participating_observers` (array[string]) — DIDs of agents that contributed votes
+- `threshold` (int) — minimum agreement count required
+- `agreement_count` (int) — actual agreement count
+- `dissent_count` (int) — disagreement count
+- `created_at` (int64, epoch ms)
+
+**Optional fields:**
+- `dissent_grains` (array[string]) — content addresses of minority-opinion grains
+- `agreed_content` (string or map) — the consensus claim
+- All common fields from §6.1
+
+### 8.10 Consent (type = 0x0A)
+
+A DID-scoped, purpose-bounded permission grant or withdrawal. Four of six industry review domains independently required a dedicated Consent type at the type-byte level — HIPAA patient consent, legal privilege and DPA, regulatory consent, and GDPR/CCPA at scale. The `Belief + mg:permits` pattern is semantically correct but impractical when consent queries are compliance-critical and frequent.
+
+**Required fields:**
+- `type` = "consent"
+- `subject_did` (string) — DID of the consenting party
+- `grantee_did` (string) — DID of the party receiving permission
+- `scope` (array[string]) — operations consented to. Standard values: `"store"`, `"retrieve"`, `"share"`, `"process"`, `"infer"`, `"train"`, `"profile"`. Open enum.
+- `is_withdrawal` (bool) — `true` if revoking a prior consent
+- `created_at` (int64, epoch ms)
+
+**Optional fields:**
+- `valid_from`, `valid_to` (int64, epoch ms) — consent window
+- `basis` (string) — `"explicit_consent"`, `"legitimate_interest"`, `"contract"`, `"legal_obligation"`. Open enum.
+- `jurisdiction` (string) — `"eu"`, `"us_ccpa"`, `"us_hipaa"`, `"br_lgpd"`. Open enum.
+- `prior_consent` (string) — content address of the Consent grain being superseded (REQUIRED when `is_withdrawal: true`)
+- `witness_dids` (array[string]) — DIDs of witness agents
+
+**Normative rules:**
+1. A Consent grain with `is_withdrawal: true` MUST reference `prior_consent`.
+2. Stores MUST honor consent withdrawal immediately. Consent grains MUST NOT be subject to automatic forgetting or retention decay.
+3. A withdrawn Consent grain is NOT deleted — both grant and withdrawal are retained for audit.
+4. Default `invalidation_policy.mode` for Consent grains is `"soft_locked"`.
+5. The `processing_basis` common field (§6.1) on any grain carries the content address of the Consent grain that authorized its creation — enabling GDPR Art. 17 erasure cascade.
 
 ---
 
@@ -1087,7 +1093,10 @@ The .mg file is the portable unit of memory. Individual grains live in blob stor
 |          | ...              |
 |          | grain N-1 bytes  |  variable
 +----------+------------------+
-| Footer   | SHA-256 checksum |  32 bytes (over header + index + grains)
+| Manifest | Index manifest   |  variable (canonical MessagePack/CBOR)
+| (opt.)   | (if flags bit 4) |  see §11.7
++----------+------------------+
+| Footer   | SHA-256 checksum |  32 bytes (over header + index + grains + manifest)
 +----------+------------------+
 ```
 
@@ -1103,7 +1112,8 @@ The .mg file is the portable unit of memory. Individual grains live in blob stor
 | 1 | `deduplicated` — no duplicate content addresses |
 | 2 | `compressed` — grain region is zstd-compressed (single block) |
 | 3 | `field_map_included` — file includes custom FIELD_MAP for app-defined fields |
-| 4-7 | Reserved |
+| 4 | `has_index_manifest` — file includes an index manifest section (§11.7) |
+| 5-7 | Reserved |
 
 **Compression codec (uint8):**
 
@@ -1131,7 +1141,7 @@ For compressed files (flags bit 2 = 1), offsets point into the decompressed grai
 
 ### 11.5 Footer Checksum
 
-SHA-256 over: `header (16 bytes) || index (grain_count*4 bytes) || grains (variable)`
+SHA-256 over: `header (16 bytes) || index (grain_count*4 bytes) || grains (variable) || manifest (variable, if present)`
 
 Enables integrity verification of entire file.
 
@@ -1148,6 +1158,52 @@ For streaming scenarios (WebSocket, SSE, Kafka, TCP), use length-prefixed framin
 | 0x00000000             |  zero-length sentinel = end of stream
 +------+------------------+
 ```
+
+### 11.7 Index Manifest (Portable Index-Layer State)
+
+When flag bit 4 (`has_index_manifest`) is set, the .mg file includes an **index manifest** section between the grain region and the footer. The manifest carries index-layer field values (§5.6, §28.3) so that a single .mg file is a self-contained, portable unit of memory — including lifecycle state, not just immutable content.
+
+**Format:** The manifest is a canonical MessagePack (or CBOR, matching the grains' encoding) map keyed by content address:
+
+```
+{
+  "<content_address>": {
+    "sb":      "<superseding content address>",
+    "svt":     1737000000000,
+    "vstatus": "verified"
+  },
+  "<content_address>": {
+    "vstatus": "contested",
+    "ac":      42,
+    "laa":     1737500000000
+  }
+}
+```
+
+Field names use the compacted short keys from §6.1. Null/absent values are omitted per §4. Only grains with at least one non-default index-layer field need an entry.
+
+**Field portability classes:**
+
+| Class | Fields | Export | Import |
+|-------|--------|--------|--------|
+| **Portable** | `superseded_by`, `system_valid_to`, `verification_status` | MUST include | MUST merge into index |
+| **Local** | `access_count`, `last_accessed_at` | MAY include | MAY merge or reset to zero |
+
+Portable fields carry semantic state (supersession chains, verification decisions) that is meaningful across systems. Local fields carry store-specific access statistics that may not be meaningful in a different deployment.
+
+**Export rules:**
+- Exporters MUST set flag bit 4 and include a manifest when any grain in the file has non-default portable index-layer fields.
+- Exporters SHOULD include local fields as a convenience; omitting them is not an error.
+
+**Import rules:**
+- Importers MUST parse the manifest when flag bit 4 is set.
+- Importers MUST apply portable fields to their index layer. If a grain already exists in the target store with conflicting index state, the conflict resolution strategy is implementation-defined (last-writer-wins, manual review, etc.).
+- Importers MAY ignore local fields or reset them to defaults (e.g., `access_count: 0`).
+- Importers MUST NOT inject manifest fields into the immutable blob. The manifest is index-layer metadata only.
+
+**Integrity:** The manifest bytes are included in the footer checksum (§11.5) but are NOT part of any grain's content address. Tampering with the manifest is detectable via the footer checksum, but the immutable grain blobs remain independently verifiable by their own content addresses.
+
+> **Implementation note:** For .mg files without flag bit 4, importers SHOULD initialize all index-layer fields to defaults (`verification_status: "unverified"`, `access_count: 0`, etc.). The absence of a manifest means either the exporter predates this feature or all grains had default index-layer state.
 
 ---
 
@@ -1192,6 +1248,162 @@ Replaces the earlier `agent_id` string (free-form, unverifiable):
 
 For non-person memory (seasonal, device, system), `user_id` is simply omitted. `namespace` handles logical grouping.
 
+### 12.5 Agent Ownership and Legal Entity
+
+An agent may belong to a legal entity — a natural person or a juridical person (company, partnership, NGO, government body). OMS expresses this relationship as a protected Belief grain written at agent provisioning time by the operator, not by the agent itself.
+
+#### 12.5.1 The `owner` Field
+
+Any grain type MAY carry an `owner` field (compacted: `own`) containing a **LegalEntity** map. In practice, `owner` is used in the ownership Belief grain described in §12.5.3. It MUST NOT be used as an access control gate — `invalidation_policy` (§23) governs supersession authorization.
+
+**LegalEntity sub-schema:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | string | REQUIRED | `"human"` (natural person) or `"org"` (juridical entity) |
+| `name` | string | REQUIRED | Registered legal name |
+| `entity_form` | string | OPTIONAL | Legal structure (open enum; see §12.5.2). Omit when `type: "human"`. |
+| `jurisdiction` | string | OPTIONAL | ISO 3166-2 code of registration jurisdiction (e.g., `"US-DE"`, `"IN-KA"`, `"GB"`, `"SG"`) |
+| `reg_id` | string | OPTIONAL | Government registration ID, prefixed by type (e.g., `"EIN:88-..."`, `"CIN:U..."`, `"ABN:51..."`) |
+| `did` | string | OPTIONAL | W3C DID for cryptographic verifiability. RECOMMENDED when available. |
+
+#### 12.5.2 `entity_form` Registry (Open Enum)
+
+| Value | Legal structure |
+|---|---|
+| `"c_corp"` | C-Corporation (US) |
+| `"s_corp"` | S-Corporation (US) |
+| `"pbc"` | Public Benefit Corporation (US) |
+| `"llc"` | Limited Liability Company (US) |
+| `"llp"` | Limited Liability Partnership (US / India / UK) |
+| `"pvt_ltd"` | Private Limited Company (India: Pvt. Ltd.; UK: Ltd.) |
+| `"plc"` | Public Limited Company (UK) |
+| `"gmbh"` | Gesellschaft mit beschränkter Haftung (DE / AT / CH) |
+| `"sarl"` | Société à responsabilité limitée (FR and Francophone jurisdictions) |
+| `"bv"` | Besloten vennootschap (NL / BE) |
+| `"pty_ltd"` | Proprietary Limited (AU / ZA) |
+| `"sole_proprietor"` | Sole proprietorship (any jurisdiction) |
+| `"partnership"` | General partnership |
+| `"ngo"` | Non-governmental organization / 501(c)(3) |
+| `"government"` | Government body or public agency |
+| `"trust"` | Trust entity |
+| `"cooperative"` | Cooperative |
+
+This is an open enum. Implementations MAY define additional values for jurisdiction-specific structures not listed above.
+
+**`reg_id` prefix conventions:**
+
+| Prefix | Country | ID type |
+|---|---|---|
+| `EIN:` | US | Employer Identification Number |
+| `CIN:` | India | Company Identification Number (MCA) |
+| `GSTIN:` | India | GST Identification Number |
+| `ABN:` | Australia | Australian Business Number |
+| `VAT:` | EU / UK | VAT registration number |
+| `UEN:` | Singapore | Unique Entity Number |
+| `SIREN:` | France | Système d'Identification du Répertoire des Entreprises |
+
+Prefixes not listed here MUST be preserved as-is. New prefixes do not require a spec update.
+
+#### 12.5.3 Ownership Belief Grain Convention
+
+Agent ownership is expressed as a Belief grain with `relation: "mg:owned_by"` in the `"agent:identity"` namespace. The `object` field carries the owner's legal name as a string (for semantic triple completeness). The structured `owner` field carries the full LegalEntity map.
+
+This grain MUST be written by the operator at agent provisioning time. It MUST carry an `invalidation_policy` (§23) restricting supersession to the owner's authorized DID. It SHOULD be COSE-signed (§9) by the owner's DID.
+
+**Example — organization owner (Indian Pvt. Ltd.):**
+
+```json
+{
+  "type": "belief",
+  "subject": "did:web:example.com:agents:my-agent",
+  "relation": "mg:owned_by",
+  "object": "Example Corp Pvt. Ltd.",
+  "owner": {
+    "type": "org",
+    "name": "Example Corp Pvt. Ltd.",
+    "entity_form": "pvt_ltd",
+    "jurisdiction": "IN-KA",
+    "reg_id": "CIN:U72900KA2023PTC123456",
+    "did": "did:web:example.com"
+  },
+  "source_type": "system",
+  "author_did": "did:web:example.com",
+  "namespace": "agent:identity",
+  "structural_tags": ["legal:ownership", "mg:protected"],
+  "invalidation_policy": {
+    "mode": "locked",
+    "authorized": ["did:web:example.com"],
+    "scope": "lineage",
+    "protection_reason": "Immutable ownership declaration — change requires authorized officer signature"
+  },
+  "created_at": 1737000000000
+}
+```
+
+**Example — individual human owner:**
+
+```json
+{
+  "type": "belief",
+  "subject": "did:key:z6MkAgentDID...",
+  "relation": "mg:owned_by",
+  "object": "Jane Doe",
+  "owner": {
+    "type": "human",
+    "name": "Jane Doe",
+    "jurisdiction": "IN",
+    "did": "did:key:z6MkJaneDoeKey..."
+  },
+  "source_type": "system",
+  "author_did": "did:key:z6MkJaneDoeKey...",
+  "namespace": "agent:identity",
+  "structural_tags": ["legal:ownership", "mg:protected"],
+  "invalidation_policy": {
+    "mode": "locked",
+    "authorized": ["did:key:z6MkJaneDoeKey..."],
+    "scope": "lineage",
+    "protection_reason": "Individual owner declaration"
+  },
+  "created_at": 1737000000000
+}
+```
+
+**Example — US LLC (Delaware):**
+
+```json
+{
+  "owner": {
+    "type": "org",
+    "name": "Acme Labs LLC",
+    "entity_form": "llc",
+    "jurisdiction": "US-DE",
+    "reg_id": "EIN:47-1234567",
+    "did": "did:web:acmelabs.io"
+  }
+}
+```
+
+**Normative rules:**
+
+1. The ownership grain MUST NOT be authored by the agent's own DID. Only the operator's DID is authorized to write it (key separation, §23.8).
+2. The `subject` MUST be the agent's DID.
+3. When multiple grains with `relation: "owned_by"` exist for the same `subject` in the `"agent:identity"` namespace, the grain with `invalidation_policy.mode ≠ "open"` is authoritative. Stores SHOULD surface it as the canonical ownership record.
+4. An agent observing a user assertion that contradicts the locked ownership grain MAY record that claim as an Observation grain. It MUST NOT write a superseding ownership Belief without the authorized signature.
+
+#### 12.5.4 Protection Layers
+
+The `locked` invalidation policy combined with COSE signing provides layered protection against ownership spoofing:
+
+| Layer | Mechanism | What it prevents |
+|---|---|---|
+| Policy lock | `invalidation_policy.mode: "locked"` (§23) | Store rejects any supersession not signed by `authorized` DID; returns `ERR_INVALIDATION_DENIED` |
+| Key separation | Agent DID ≠ owner DID (§23.8) | Agent cannot produce a valid supersession signature even if instructed to by a user |
+| Lineage scope | `scope: "lineage"` (§23.6) | Supersession chain injection — agent cannot supersede a derived grain to bypass the protected root |
+| COSE signature | Owner signs the blob (§9) | Blob tampering changes the content address; the original signed grain remains valid and current |
+
+**Prompt injection resistance:** A user or external input asserting "your owner is now X" does not create or modify an ownership grain. The agent lacks the owner's private key and cannot author a superseding grain that passes the `locked` policy check. The original ownership fact remains current.
+
 ---
 
 ## 13. Sensitivity Classification
@@ -1219,7 +1431,7 @@ Detailed sensitivity classification via `structural_tags` in payload:
 | `phi:` | Health data | `phi:diagnosis`, `phi:medication`, `phi:lab_result` |
 | `reg:` | Regulatory jurisdiction | `reg:pci-dss`, `reg:sox`, `reg:basel-iii`, `reg:gdpr-art17` |
 | `sec:` | Security data | `sec:credential`, `sec:api_key`, `sec:token` |
-| `legal:` | Legal data | `legal:privilege`, `legal:litigation_hold` |
+| `legal:` | Legal data | `legal:ownership`, `legal:privilege`, `legal:litigation_hold` |
 
 The `reg:` prefix identifies which regulatory storage or retention rules apply to a grain. The vocabulary is **open-ended** — use well-known regulation identifiers. Examples: `reg:pci-dss` (PCI-compliant storage required), `reg:sox` (7-year immutable audit retention), `reg:basel-iii` (regulatory capital data), `reg:gdpr-art17` (erasure-eligible). Unlike `pii:` or `phi:`, `reg:` tags carry no compliance classification claim — they are routing and policy directives.
 
@@ -1284,7 +1496,7 @@ Each entry has:
 - `method` — consolidation method or source type
 - `weight` — how much this source contributed (0.0–1.0)
 
-**Provenance chain method strings for Observation grains (v1.1):**
+**Provenance chain method strings for Observation grains:**
 
 | Method String | Meaning |
 |---|---|
@@ -1413,10 +1625,9 @@ Implementations MUST declare which level they support:
 - Deserialize version byte + canonical MessagePack payload
 - Compute and verify SHA-256 content addresses
 - Support field compaction (short keys → full names)
-- Support all 7 memory types
+- Support all ten standard grain types (0x01–0x0A) per §8 schemas
 - Ignore unknown fields
 - Constant-time hash comparison
-- **v1.1:** MUST accept deprecated short keys `sid` and `stype` in Observation grains and map them to `observer_id` and `observer_type` respectively
 
 Level 1 is sufficient for reading, verifying, and storing grains.
 
@@ -1433,9 +1644,9 @@ All Level 1 requirements, plus:
 - Implement `supersede` as a distinct, atomic store operation (not a raw `put` + index patch); `put` MUST reject grains containing `derived_from` claims that imply supersession without going through `supersede`
 - Apply fail-closed rule: unknown `invalidation_policy.mode` values MUST be treated as `mode: "locked"`
 - Enforce the `replaces` non-supersession rule: `relation_type: "replaces"` MUST NOT trigger index mutations on the target grain
-- **v1.1:** MUST validate that `observer_type` is a non-empty string; MUST NOT reject unknown `observer_type` values (open enum)
-- **v1.1:** MUST emit `oid` and `otype` short keys; MUST NOT emit deprecated `sid` or `stype`
-- **v1.1:** SHOULD warn (but MUST NOT reject) when `observer_model` is absent on Observation grains where `observer_type` is `"llm"`, `"reflector"`, `"classifier"`, or `"detector"`
+- MUST validate that `observer_type` is a non-empty string; MUST NOT reject unknown `observer_type` values (open enum)
+- MUST emit `oid` and `otype` short keys
+- SHOULD warn (but MUST NOT reject) when `observer_model` is absent on Observation grains where `observer_type` is `"llm"`, `"reflector"`, `"classifier"`, or `"detector"`
 
 ### 17.3 Level 3: Production Store
 
@@ -1449,7 +1660,7 @@ All Level 2 requirements, plus:
 - Hash-chained audit trail
 - Crash recovery and reconciliation
 - Policy engine with compliance presets
-- **v1.1:** SHOULD partition Observation grain storage by observer domain, inferred from `observer_type`. Physical observer types (see Section 24) SHOULD flow to time-series storage with raw-data retention policies. Cognitive observer types SHOULD flow to vector + relational storage with the same retrieval semantics as Fact grains. Implementations MUST NOT hard-code the domain partition list — treat `observer_type` as an open string and drive routing from configuration or namespace.
+- SHOULD partition Observation grain storage by observer domain, inferred from `observer_type`. Physical observer types (see Section 24) SHOULD flow to time-series storage with raw-data retention policies. Cognitive observer types SHOULD flow to vector + relational storage with the same retrieval semantics as Belief grains. Implementations MUST NOT hard-code the domain partition list — treat `observer_type` as an open string and drive routing from configuration or namespace.
 
 ---
 
@@ -1630,16 +1841,16 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 69 74 a1 74 a4 66 61 63 74
 ```
 
-> Header breakdown: `01`=version, `00`=flags (public, MessagePack, unsigned), `01`=Fact type, `a4 d2`=SHA-256("shared")[0:2] as uint16 big-endian, `69 68 ba a0`=created_at_sec (1768471200 = 2026-01-15T10:00:00Z, big-endian).
+> Header breakdown: `01`=version, `00`=flags (public, MessagePack, unsigned), `01`=Belief type, `a4 d2`=SHA-256("shared")[0:2] as uint16 big-endian, `69 68 ba a0`=created_at_sec (1768471200 = 2026-01-15T10:00:00Z, big-endian).
 >
 > Payload breakdown: `89`=fixmap(9), `a4 61 64 69 64`=key "adid" (fixstr 4), `d9 38`=str8 length 56, followed by 56 UTF-8 bytes of the DID; key `c` value: `cb 3f ec cc cc cc cc cc cd` (float64 marker + 8 bytes = `3feccccccccccccd` = 0.9); then remaining keys "ca"/"ns"/"o"/"r"/"s"/"st"/"t" in lexicographic order with their values.
 
-### 21.2 Vector 2: Episode
+### 21.2 Vector 2: Event
 
 **Input:**
 ```json
 {
-  "type": "episode",
+  "type": "event",
   "content": "User asked about dark mode settings",
   "created_at": 1768471200000,
   "namespace": "shared",
@@ -1653,12 +1864,12 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 [computed by reference implementation]
 ```
 
-### 21.3 Vector 3: Bi-Temporal Fact
+### 21.3 Vector 3: Bi-Temporal Belief
 
 **Input:**
 ```json
 {
-  "type": "fact",
+  "type": "belief",
   "subject": "Alice",
   "relation": "works_at",
   "object": "Acme Corp",
@@ -1677,12 +1888,12 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 [computed by reference implementation]
 ```
 
-### 21.4 Vector 4: Fact with Cross-Links
+### 21.4 Vector 4: Belief with Cross-Links
 
 **Input:**
 ```json
 {
-  "type": "fact",
+  "type": "belief",
   "subject": "Bob",
   "relation": "manages",
   "object": "Project Alpha",
@@ -1723,7 +1934,6 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 }
 ```
 
-**Note:** v1.1 serializers emit short keys `oid` and `otype` for this grain. v1.0 legacy grains using `sid`/`stype` short keys are accepted by v1.1 readers under the backward-compatibility aliasing rule (§6.6).
 
 ### 21.6 Vector 6: Protected Fact with invalidation_policy
 
@@ -1831,6 +2041,47 @@ To verify conformance:
 4. Deserialize blob → recreate grain
 5. Serialize again → MUST match original blob bytes (round-trip fidelity)
 
+### 22.7 Streaming and Partial Results
+
+OMS grains are atomic, immutable knowledge units. Streaming outputs (e.g., token-by-token LLM responses, incremental tool results, partial server-sent events) are transport-layer concerns outside OMS scope. Implementations SHOULD buffer streaming content in their transport layer and emit a single immutable Event or Action grain upon stream completion. For long-running tool executions requiring progress visibility, implementations MAY emit periodic State grains (type 0x03) as progress checkpoints, linked via `derived_from` to the originating Action grain. Each checkpoint is a complete, self-contained grain — not a diff.
+
+### 22.8 Recall Priority and Agent Memory Tiers
+
+The `recall_priority` field (§6.1) maps to the memory tiering models used by agent frameworks:
+
+| `recall_priority` | Tier | Framework mapping | Retrieval pattern |
+|---|---|---|---|
+| `"hot"` | In-context memory | Letta `core_memory`, LangChain `ConversationBufferMemory` | Included in every LLM prompt. Grains SHOULD be cached in-memory by the store. |
+| `"warm"` | Retrieval memory | Letta `recall_memory`, LangChain `VectorStoreRetrieverMemory` | Retrieved by recency, embedding similarity, or structured filter. Typical RAG context. |
+| `"cold"` | Archival memory | Letta `archival_memory`, long-term compliance storage | Retained for completeness, audit, and compliance. Not actively retrieved unless explicitly queried. |
+
+Stores MAY use `recall_priority` to select storage tiers (e.g., SSD for hot, HDD for cold, object storage for archive). Writers SHOULD set `recall_priority` based on expected retrieval frequency. The default when absent is `"warm"`.
+
+### 22.9 State Grain Context Schema Convention
+
+For cross-framework agent state portability, implementations SHOULD use the following keys in the State grain (type 0x03) `context` map:
+
+| Key | Type | Description |
+|---|---|---|
+| `messages_tail` | string | Content address of the most recent Event grain in the conversation |
+| `memory_blocks` | map | Named memory blocks: `{block_name: block_value_string}`. Letta-compatible. |
+| `system_prompt` | string | System prompt text, or content address of a Belief grain containing it |
+| `active_tools` | array[string] | Tool names available in this agent state |
+| `model` | string | LLM model identifier (e.g., `"claude-opus-4-6"`) |
+| `pending_tool_calls` | array[string] | Content addresses of Action grains in `"call"` phase awaiting results |
+| `agent_config` | map | Framework-specific agent configuration (opaque to the spec) |
+
+This schema is RECOMMENDED, not required. Implementations MAY include additional keys. The `memory_blocks` key is aligned with Letta's `core_memory` structure. The `messages_tail` key enables reconstructing the conversation by following `parent_message_id` chains backward from the tail.
+
+### 22.10 Access Counter Semantics
+
+Stores that implement `access_count` and `last_accessed_at` (§28.3) SHOULD observe the following:
+
+- Stores MAY defer counter updates and flush them asynchronously. The maximum acceptable staleness is implementation-defined but SHOULD be documented.
+- Only **user-facing retrieval operations** (search, get, query) SHOULD increment `access_count`. Internal reads — provenance traversal, invalidation checks, supersession chain resolution, compliance scans, and replication — SHOULD NOT increment it.
+- Stores MAY use probabilistic counting (e.g., HyperLogLog) or sampling for high-frequency grains to limit write amplification.
+- Stores MAY disable access tracking entirely and document this as a conformance note. `access_count` and `last_accessed_at` are OPTIONAL index-layer features, not conformance requirements.
+
 ---
 
 ## References
@@ -1875,7 +2126,7 @@ The `invalidation_policy` governs paths 1 and 2. Protection is declared at grain
 
 ```msgpack
 invalidation_policy: {
-  "mode": "open" | "soft_locked" | "locked" | "quorum" | "delegated" | "timed",
+  "mode": "open" | "soft_locked" | "locked" | "quorum" | "delegated" | "timed" | "hold" | "consent_cascade",
   "authorized": ["did:key:z6Mk...", ...],   // for modes: delegated, quorum
   "threshold": 2,                            // for mode: quorum — minimum co-signers
   "locked_until": 1800000000,               // for mode: timed — Unix epoch u64 seconds
@@ -1895,6 +2146,8 @@ invalidation_policy: {
 | `quorum` | Superseding grain MUST carry `supersession_auth` array with ≥ `threshold` valid COSE signatures from `authorized` DIDs | Verify each signature; reject if threshold not met |
 | `delegated` | Only DIDs listed in `authorized` may invalidate; superseding grain MUST be COSE-signed by one of those DIDs | Verify signer is in `authorized` list |
 | `timed` | Behaves as `locked` until `locked_until` epoch; then reverts to `fallback_mode` | Check wall clock against `locked_until`; apply `fallback_mode` after |
+| `hold` | **Litigation hold** — grain MUST NOT be deleted, erased, or forgotten until hold is explicitly lifted. Supersedes TTL, consent withdrawal, erasure requests, and forgetting engine decay. | Reject all invalidation and erasure operations; return `ERR_INVALIDATION_DENIED` |
+| `consent_cascade` | Grain is automatically eligible for erasure when its `processing_basis` Consent grain (§8.10, §6.1) is revoked. Stores MUST complete erasure within their stated SLA; SLA MUST be ≤ one month per GDPR Art. 12(3). | On Consent withdrawal, identify all grains with matching `processing_basis`, schedule for erasure within SLA |
 
 ### 23.3 Fail-Closed Rule
 
@@ -1971,210 +2224,6 @@ Deployments using `invalidation_policy` with `mode ≠ "open"` SHOULD enforce **
 | `evidence_required` (Goal) | Linked — for protected goals with `"satisfied"` in `allowed_transitions`, `evidence_required > 0` is RECOMMENDED |
 | `source_type` | Orthogonal — records provenance; do not conflate with protection. A `"user_explicit"` grain is not automatically protected; `invalidation_policy` must be set explicitly. |
 | `structural_tags` | `"mg:protected"` MAY be added as a human-facing annotation alongside `invalidation_policy` but MUST NOT be used as the sole enforcement mechanism |
-
----
-
-## Appendix A: ABNF Grammar
-
-```abnf
-mg-blob       = version-byte header-fields msgpack-payload
-version-byte  = %x01
-header-fields = flags-byte type-byte ns-hash-bytes created-at-bytes
-                ; version-byte + header-fields = 9-byte "fixed header" in §3.1
-flags-byte    = %x00-FF
-type-byte     = %x01-FF
-ns-hash-bytes = 2OCTET  ; uint16 big-endian, first two bytes of SHA-256(namespace)
-created-at-bytes = 4OCTET  ; uint32 big-endian
-
-msgpack-payload = canonical-map
-canonical-map = fixmap / map16 / map32
-fixmap        = %x80-8F *key-value
-map16         = %xDE uint16 *key-value
-map32         = %xDF uint32 *key-value
-
-key-value     = msgpack-string msgpack-value
-msgpack-string = fixstr / str8 / str16 / str32  ; UTF-8 NFC-normalized
-msgpack-value = msgpack-string / msgpack-int / msgpack-float
-              / msgpack-bool / msgpack-array / canonical-map
-              / msgpack-null  ; but nulls MUST be omitted from maps
-
-content-address = 64 HEXDIG
-
-mg-file       = magic flags grain-count field-map-ver compression-type
-                reserved offset-table grains footer
-magic         = "MG" %x01
-flags         = %x00-FF
-grain-count   = 4OCTET  ; uint32
-field-map-ver = %x00-FF
-compression-type = %x00-FF
-reserved      = 6OCTET
-offset-table  = *4OCTET  ; grain_count × uint32
-grains        = *mg-blob
-footer        = 32OCTET  ; SHA-256 checksum
-```
-
----
-
-## Appendix B: Field Mapping Table (Compact Reference)
-
-**Core & Multi-Modal Fields:**
-
-```json
-{
-  "t": "type",
-  "s": "subject",
-  "r": "relation",
-  "o": "object",
-  "c": "confidence",
-  "st": "source_type",
-  "ca": "created_at",
-  "tt": "temporal_type",
-  "vf": "valid_from",
-  "vt": "valid_to",
-  "svf": "system_valid_from",
-  "svt": "system_valid_to",
-  "ctx": "context",
-  "sb": "superseded_by",
-  "ct": "contradicted",
-  "im": "importance",
-  "adid": "author_did",
-  "ns": "namespace",
-  "user": "user_id",
-  "tags": "structural_tags",
-  "df": "derived_from",
-  "cl": "consolidation_level",
-  "sc": "success_count",
-  "fc": "failure_count",
-  "pc": "provenance_chain",
-  "odid": "origin_did",
-  "ons": "origin_namespace",
-  "cr": "content_refs",
-  "er": "embedding_refs",
-  "rt": "related_to",
-  "_e": "_elided",
-  "_do": "_disclosure_of",
-  "ip": "invalidation_policy",
-  "sj": "supersession_justification",
-  "sa": "supersession_auth"
-}
-```
-
-**Observation-Specific Fields (v1.1):**
-
-```json
-{
-  "oid": "observer_id",
-  "otype": "observer_type",
-  "fid": "frame_id",
-  "sg": "sync_group",
-  "omode": "observation_mode",
-  "oscope": "observation_scope",
-  "omdl": "observer_model",
-  "ocmp": "compression_ratio"
-}
-```
-
-> **Deprecated short keys (v1.0, accepted by readers until v2.0):** `"sid"` → `observer_id`, `"stype"` → `observer_type`
-
-**Goal-Specific Fields:**
-
-```json
-{
-  "desc": "description",
-  "gs": "goal_state",
-  "crit": "criteria",
-  "crs": "criteria_structured",
-  "pri": "priority",
-  "pgs": "parent_goals",
-  "sr": "state_reason",
-  "se": "satisfaction_evidence",
-  "prog": "progress",
-  "dto": "delegate_to",
-  "dfo": "delegate_from",
-  "ep": "expiry_policy",
-  "rec": "recurrence",
-  "evreq": "evidence_required",
-  "rof": "rollback_on_failure",
-  "atr": "allowed_transitions"
-}
-```
-
-**Content Reference Nested Compaction:**
-
-```json
-{
-  "u": "uri",
-  "m": "modality",
-  "mt": "mime_type",
-  "sz": "size_bytes",
-  "ck": "checksum",
-  "md": "metadata"
-}
-```
-
-**Embedding Reference Nested Compaction:**
-
-```json
-{
-  "vi": "vector_id",
-  "mo": "model",
-  "dm": "dimensions",
-  "ms": "modality_source",
-  "di": "distance_metric"
-}
-```
-
-**Related-To Nested Compaction:**
-
-```json
-{
-  "h": "hash",
-  "rl": "relation_type",
-  "w": "weight"
-}
-```
-
----
-
-## Appendix C: Compliance Mapping
-
-### GDPR
-
-| Article | .mg Support |
-|---------|------------|
-| Art. 5 (Data minimization) | `user_id` field enables per-person scope |
-| Art. 12-23 (Rights) | Structured data format for automated response |
-| Art. 17 (Erasure) | Crypto-erasure via key destruction |
-| Art. 25 (Privacy by design) | Provenance and audit built-in |
-| Art. 30 (Records of processing) | `provenance_chain` and `created_at` timestamps support records-of-processing obligations |
-| Art. 32 (Security) | COSE signing, AES-256-GCM encryption |
-
-### HIPAA (45 CFR §164)
-
-| Section | .mg Support |
-|---------|------------|
-| §164.308 (Administrative) | Audit trail via `provenance_chain` |
-| §164.310 (Physical) | N/A (transport layer) |
-| §164.312 (Technical) | AES-256-GCM encryption, COSE signatures |
-| §164.314 (Organizational) | N/A (policy engine) |
-
-### CCPA
-
-| Requirement | .mg Support |
-|------------|------------|
-| Personal information collection | `user_id` and `structural_tags` for classification |
-| Disclosure | Selective disclosure hides sensitive fields |
-| Deletion | Crypto-erasure via key destruction |
-| Opt-out | Policy-layer enforcement (outside .mg) |
-
----
-
-## Appendix D: Version History
-
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.0 | 2026-02-17 | Initial publication — 9-byte fixed header (version 0x01, 2-byte NS hash), canonical serialization, content addressing, seven memory types (incl. Goal 0x07), COSE signing, selective disclosure, .mg container files, W3C DIDs, sensitivity bits, reg: tag vocabulary, provenance, temporal modeling, conformance levels, device profiles |
-| 1.1 | 2026-02-20 | Generalized Observer: renamed `sensor_id`→`observer_id` (short key `sid`→`oid`) and `sensor_type`→`observer_type` (short key `stype`→`otype`); added four new Observation-specific fields (`observation_mode`, `observation_scope`, `observer_model`, `compression_ratio`); generalized `frame_id` and `sync_group` semantics to cover both physical-coordinate and cognitive-context framing; added Observer Type Registry (Section 24), Observation Mode Registry (Section 25), Observation Scope Registry (Section 26); extended elidability table, provenance method strings, and conformance level requirements; deprecated v1.0 short keys `sid`/`stype` with read-only compatibility until v2.0 |
 
 ---
 
@@ -2256,12 +2305,759 @@ The `observation_scope` field is a **closed enum**. It describes the temporal br
 - `"interval"` → `valid_from` < `valid_to`; window is typically much shorter than a session
 - `"session"` → `valid_from` = session start, `valid_to` = session end
 - `"longitudinal"` → `valid_from` = earliest covered session, `valid_to` = latest covered session; `derived_from` SHOULD enumerate the intermediate Observation grains from each covered session
+---
+
+## 27. Grain Type Field Specifications
+
+This section provides detailed field specifications for each standard grain type. For Action grain phase fields, see §27.1. For Observer types, see §24. For Observation modes/scopes, see §25/§26.
+
+### 27.1 Action Grain (type = 0x05) — Phase and Mode Details
+
+The `action_phase` field acts as a discriminator for async vs. synchronous tool call recording.
+
+**`action_phase` discriminator:**
+
+| Value | Meaning | Required fields | Absent fields |
+|---|---|---|---|
+| `"definition"` | **Definition** — tool schema record | `tool_name`, `tool_description`, `input_schema` | `input`, `content`, `is_error`, `tool_call_id` |
+| absent (default) | **Complete** — synchronous call | `tool_name`, `input`, `content`, `is_error` | `derived_from` |
+| `"call"` | **Call** — async; result not yet received | `tool_name`, `input` | `content`, `is_error` |
+| `"result"` | **Result** — async result arrived | `tool_call_id`, `content`, `is_error`, `derived_from` | `tool_name`, `input` |
+
+**Phase-dependent field presence:**
+
+| Field | `"definition"` | `"call"` | `"result"` | complete (absent) |
+|---|---|---|---|---|
+| `tool_name` | REQUIRED | REQUIRED | omit | REQUIRED |
+| `tool_description` | REQUIRED | omit | omit | omit |
+| `input_schema` | REQUIRED | omit | omit | omit |
+| `strict` | optional | omit | omit | omit |
+| `tool_type` | optional | optional | omit | optional |
+| `tool_version` | optional | optional | omit | optional |
+| `input` | MUST NOT | REQUIRED | omit | REQUIRED |
+| `tool_call_id` | omit | RECOMMENDED | REQUIRED | optional |
+| `call_batch_id` | omit | optional | optional | optional |
+| `content` | MUST NOT | MUST NOT | REQUIRED | REQUIRED |
+| `is_error` | MUST NOT | MUST NOT | REQUIRED | REQUIRED |
+| `stdout` / `stderr` | MUST NOT | MUST NOT | optional | optional |
+| `exit_code` | MUST NOT | MUST NOT | optional | optional |
+| `duration_ms` | MUST NOT | MUST NOT | optional | optional |
+| `derived_from` | omit | omit | `[call grain hash]` | omit |
+
+**`execution_mode` values:**
+
+| Value | Meaning |
+|---|---|
+| absent (default) | Standard function call — `tool_name` + `input` |
+| `"function_call"` | Explicit standard function call |
+| `"code_exec"` | CodeAct-style: `code` field holds executable Python/shell; result in `stdout`/`stderr` |
+| `"computer_use"` | Anthropic computer-use tool; `input` holds action type and coordinates |
 
 ---
 
-## Appendix E: Glossary
+**Example 0 — Tool definition grain:**
 
-- **Blob:** Complete .mg binary (version byte + optional header + payload)
+```json
+{
+  "type": "action",
+  "action_phase": "definition",
+  "tool_name": "get_weather",
+  "tool_description": "Get the current weather in a given location.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "location": {"type": "string"},
+      "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+    },
+    "required": ["location"]
+  },
+  "strict": true,
+  "tool_type": "client",
+  "author_did": "did:web:example.com:agents:assistant",
+  "created_at": 1737000000000
+}
+```
+
+**Example 1 — Synchronous function call:**
+
+```json
+{
+  "type": "action",
+  "tool_name": "get_weather",
+  "tool_call_id": "toulu_01A09q90qw90lq917835lq9",
+  "input": {"location": "San Francisco, CA", "unit": "celsius"},
+  "content": "15°C, partly cloudy",
+  "is_error": false,
+  "duration_ms": 312,
+  "created_at": 1737000000000
+}
+```
+
+**Example 2 — CodeAct code execution:**
+
+```json
+{
+  "type": "action",
+  "execution_mode": "code_exec",
+  "code": "import pandas as pd\ndf = pd.read_csv('data.csv')\nprint(df.describe())",
+  "interpreter_id": "session-abc123",
+  "stdout": "       age    salary\ncount  100.0   100.0",
+  "exit_code": 0,
+  "is_error": false,
+  "created_at": 1737000000000
+}
+```
+
+**Alignment with Anthropic API:**
+
+| Anthropic API field | OMS Action field |
+|---|---|
+| `tool.name` | `tool_name` (definition grain) |
+| `tool.description` | `tool_description` |
+| `tool.input_schema` | `input_schema` |
+| `tool.strict` | `strict` |
+| `tool_use.id` | `tool_call_id` |
+| `tool_use.input` | `input` |
+| `tool_result.content` | `content` |
+| `tool_result.is_error` | `is_error` |
+
+### 27.2 Goal Grain (type = 0x07) — Lifecycle and Provenance Details
+
+**Provenance chain methods:**
+
+| Method | Meaning |
+|---|---|
+| `"user_input"` | Human set this goal directly |
+| `"goal_decomposition"` | Agent decomposed a parent goal |
+| `"goal_state_transition"` | Updates state of a prior Goal grain |
+| `"goal_revision"` | Human modified a previously set goal |
+| `"goal_inference"` | Agent inferred from Event or Belief patterns |
+| `"goal_delegation"` | Delegated from another agent |
+
+### 27.3 `source_type` Registry
+
+The `source_type` field is an **open enum**. Standard values:
+
+| Value | Meaning |
+|---|---|
+| `"user_explicit"` | Directly stated by human user |
+| `"agent_inferred"` | Derived by an AI agent |
+| `"sensor"` | Physical instrument measurement |
+| `"consolidated"` | Distilled from multiple prior grains |
+| `"system"` | Written by infrastructure (provisioning, etc.) |
+| `"llm_generated"` | Generated by a language model |
+| `"imported"` | Imported from external source |
+| `"established_knowledge"` | Widely accepted universal truth — physical constants, scientific laws, geographic facts. Grains with this value SHOULD omit `user_id`, SHOULD omit `valid_to`, SHOULD set `confidence: 1.0`, and SHOULD use `invalidation_policy.mode: "locked"`. |
+| `"axiomatic"` | Definitionally or logically true — mathematical axioms, tautologies. Same SHOULD rules as `"established_knowledge"`. |
+
+### 27.4 HIPAA PHI Tag Normalization
+
+The 18 normative `phi:` tag values matching 45 CFR §164.514(b) Safe Harbor identifiers:
+
+`phi:name`, `phi:geo_subdivision`, `phi:date`, `phi:age_over_89`, `phi:phone`, `phi:fax`, `phi:email`, `phi:ssn`, `phi:mrn`, `phi:health_plan_id`, `phi:account_number`, `phi:certificate_license`, `phi:vehicle_id`, `phi:device_id`, `phi:url`, `phi:ip_address`, `phi:biometric`, `phi:photo`.
+
+Stores supporting HIPAA compliance MUST recognize all 18 and apply appropriate access controls. Any `phi:*` tag MUST be treated as PHI-sensitive regardless of whether the specific value appears in this list.
+
+### 27.5 External Citation Schema
+
+Scientific and legal workflows cite external artifacts outside the OMS hash space. The `content_refs` field accepts a structured `external_citation` object alongside standard content references:
+
+```json
+{
+  "citation_type": "doi",
+  "identifier": "10.1038/s41586-024-07487-w",
+  "retrieved_at": 1737000000000,
+  "content_hash": "sha256:abc123...",
+  "citation_role": "supports"
+}
+```
+
+| Field | Type | Required | Values |
+|---|---|---|---|
+| `citation_type` | string | REQUIRED | `"doi"`, `"arxiv"`, `"pmid"`, `"isbn"`, `"rrid"`, `"clinicaltrials"`, `"url"` |
+| `identifier` | string | REQUIRED | Type-specific identifier |
+| `retrieved_at` | int64 | OPTIONAL | Epoch ms of retrieval |
+| `content_hash` | string | OPTIONAL | SHA-256 of retrieved document |
+| `citation_role` | string | OPTIONAL | `"supports"`, `"refutes"`, `"extends"`, `"replicates"`, `"uses_data"`, `"uses_software"` |
+
+The `derived_from` field SHOULD accept both OMS content addresses and external citation objects.
+
+---
+
+## 28. Query Conventions
+
+### 28.1 Standard Search Response Envelope
+
+OMS does not define a transport or query protocol. However, implementations that expose search APIs SHOULD return results using the following standard envelope to ensure interoperability:
+
+```json
+{
+  "results": [
+    {
+      "grain": { "...grain payload..." },
+      "score": 0.92,
+      "matched_fields": ["object", "subject"],
+      "content_address": "a1b2c3d4..."
+    }
+  ],
+  "total": 142,
+  "next_cursor": "opaque-pagination-token"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `grain` | map | Full deserialized grain payload |
+| `score` | float64, [0.0, 1.0] | Retrieval relevance score — distinct from `confidence` (which is epistemic certainty). A high `score` means the grain matched the query well; a high `confidence` means the claim is believed to be true. |
+| `matched_fields` | array[string] | Which payload fields contributed to the match |
+| `content_address` | string | SHA-256 hex of the grain blob |
+
+### 28.2 Namespace Convention
+
+OMS uses `namespace` (single string) for logical partitioning and `user_id` for GDPR data subject scoping. Systems that require additional scoping dimensions SHOULD use structured namespace strings with `:` as the separator:
+
+```
+{org}:{app}:{agent}:{custom}
+```
+
+Examples:
+- `"acme:chatbot:agent-7"` — org-scoped, app-scoped, agent-scoped
+- `"acme:chatbot:agent-7:session-42"` — additionally run-scoped
+- `"agent:identity"` — reserved for ownership and identity grains (§12.5)
+- `"shared"` — default, no specific partition
+
+The `run_id` field (§6.1) provides session/run scoping orthogonal to the namespace hierarchy. Use `run_id` when runs are ephemeral and high-cardinality; use namespace segments when partitions are stable and low-cardinality.
+
+### 28.3 Index-Layer-Managed Fields
+
+The following fields are updated by the **store/index layer** after initial write, not by the grain author. These fields are **not stored in the immutable .mg blob**, are **not part of the content address**, and are **not covered by COSE signatures** (see §5.6). Writers MUST NOT set these fields; stores MUST update them atomically:
+
+| Field | Updated when |
+|---|---|
+| `superseded_by` | A superseding grain is accepted |
+| `system_valid_to` | Grain is superseded or contradicted |
+| `verification_status` | Verification, contestation, or retraction occurs |
+| `access_count` | Grain is retrieved by a search or get operation (see §22.10 for semantics) |
+| `last_accessed_at` | Grain is retrieved by a search or get operation (see §22.10 for semantics) |
+
+### 28.4 Store Protocol Convention
+
+OMS does not define a formal store API. However, implementations that expose a programmatic store interface SHOULD implement the following operations to ensure interoperability:
+
+| Operation | Signature | Description |
+|---|---|---|
+| `get` | `(content_address) → grain \| not_found` | Retrieve a grain by its SHA-256 content address |
+| `put` | `(blob_bytes) → content_address \| error` | Store a grain blob; returns its content address. Idempotent: re-storing an existing blob is a no-op. |
+| `supersede` | `(old_address, new_blob_bytes, justification?) → new_address \| error` | Atomic supersession: validates `invalidation_policy` on the old grain, writes the new grain, and updates the old grain's index-layer fields (`superseded_by`, `system_valid_to`). This MUST be atomic — if any step fails, the entire operation rolls back. |
+| `exists` | `(content_address) → bool` | Check if a grain exists without retrieving it |
+| `query` | `(filters, sort, limit, cursor) → result_envelope` | Structured query with the response envelope from §28.1 |
+| `search` | `(embedding_or_text, filters, limit) → result_envelope` | Semantic similarity search combined with structured filters |
+| `delete` | `(content_address) → void \| error` | Compliance-only erasure (GDPR Art. 17, consent cascade). MUST NOT be exposed as a general-purpose API. MUST check litigation holds (`invalidation_policy.mode: "hold"`) before deleting. |
+| `put_batch` | `(blob_bytes[]) → content_address[] \| error[]` | Batch ingest for consolidation, migration, and high-throughput scenarios |
+| `get_batch` | `(content_address[]) → grain[] \| not_found[]` | Batch retrieval for provenance chain traversal and context assembly |
+
+Stores SHOULD implement `supersede` as a distinct operation rather than exposing raw `put` + index mutation separately. Supersession is the most error-prone operation (invalidation policy checks, derivation DAG traversal for `scope: "subtree"`, atomic index update) and deserves a dedicated, well-tested code path.
+
+### 28.5 Agent Capability Convention
+
+Agents that participate in multi-agent systems SHOULD advertise their capabilities by writing a Belief grain with the `mg:has_capability` relation to the `"agent:identity"` namespace. This grain serves as the OMS equivalent of an A2A Agent Card or MCP server capability declaration.
+
+**Convention:**
+```json
+{
+  "type": "belief",
+  "subject": "did:web:example.com:agents:summarizer",
+  "relation": "mg:has_capability",
+  "object": {
+    "name": "Text Summarizer",
+    "description": "Summarizes long documents into key points",
+    "supported_tools": ["summarize_text", "extract_entities"],
+    "input_modalities": ["text"],
+    "output_modalities": ["text"],
+    "protocol": "oms",
+    "max_context_tokens": 200000
+  },
+  "confidence": 1.0,
+  "source_type": "system",
+  "namespace": "agent:identity",
+  "author_did": "did:web:example.com",
+  "invalidation_policy": {
+    "mode": "delegated",
+    "authorized": ["did:web:example.com"]
+  }
+}
+```
+
+The `object` map is an open schema. Standard keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `name` | string | Human-readable agent name |
+| `description` | string | Agent purpose and capabilities summary |
+| `supported_tools` | array[string] | Tool names this agent can invoke (cross-reference with Action definition grains) |
+| `input_modalities` | array[string] | `"text"`, `"image"`, `"audio"`, `"video"`. What the agent can consume. |
+| `output_modalities` | array[string] | What the agent can produce |
+| `protocol` | string | Communication protocol: `"oms"`, `"mcp"`, `"a2a"`, `"custom"`. Open enum. |
+| `max_context_tokens` | int | Maximum context window in tokens |
+| `model` | string | Underlying LLM model identifier |
+
+Agents can discover other agents by querying Belief grains with `relation: "mg:has_capability"` in the `"agent:identity"` namespace.
+
+### 28.6 Conversation Threading Convention
+
+Conversations are reconstructed from Event grain sequences using `session_id` and `parent_message_id`:
+
+1. All Event grains in a conversation MUST share the same `session_id`.
+2. Event grains SHOULD populate `parent_message_id` (§6.2) to form a linked list from newest to oldest.
+3. Branch points are expressed by two Event grains sharing the same `parent_message_id` but having different content addresses (tree-of-thought, beam search, alternative paths).
+4. A State grain (type 0x03) with `relation: "mg:state_at"` and a `context` map containing `{messages_tail, message_count, participants}` represents a conversation snapshot.
+5. Conversation summaries are Belief grains with `consolidation_level >= 1`, `derived_from` pointing to the summarized Event grains, and `source_type: "consolidated"`.
+
+**Retrieving a conversation:**
+1. Query: `type=event, session_id=X, system_valid_to=null, sort=timestamp_ms ASC`
+2. Or: start from the most recent Event grain (`messages_tail` in a State grain) and follow `parent_message_id` backward.
+
+### 28.7 Session Handoff Convention
+
+When Agent A transfers control of a conversation to Agent B, the handoff is recorded using a Goal grain with `mg:delegates_to` relation and delegation scope fields (§6.11):
+
+1. Agent A writes a Goal grain with `relation: "mg:delegates_to"`, `subject` = Agent A's DID, `object` = Agent B's DID, and delegation scope fields specifying `authorized_namespaces`, `authorized_tools`, `context_grains`, and `return_to`.
+2. The `context_grains` field contains content addresses of grains Agent B needs to continue — typically the recent Event grain chain and any relevant Belief/State grains.
+3. Agent B ingests the referenced grains, validates the delegation scope, and continues with a new `run_id` but the same `session_id`.
+4. When Agent B completes its task, it writes a Goal grain with `goal_state: "satisfied"` linked via `derived_from` to the delegation grain, and control returns to the agent specified in `return_to`.
+
+---
+
+## Appendix A: Domain Profile Registry
+
+Domain Profiles allow implementers to extend the OMS field vocabulary with domain-specific fields while preserving core interoperability. A grain declares membership in a domain profile by including a `structural_tag` of the form `"profile:<name>"` (e.g., `"profile:healthcare"`). A grain MAY declare membership in multiple profiles.
+
+**Rules for profile implementations:**
+- Profile-specific field names MUST use the domain namespace prefix defined below.
+- Profile fields that are required within the profile MUST be validated only when the profile tag is present; they are always optional in the absence of the profile tag.
+- Profile fields MUST NOT conflict with core OMS field names (§6).
+- Profile short keys for compaction MUST be registered with the OMS working group to avoid collisions.
+
+### A.1 Healthcare Profile (`hc:`)
+
+**Tag:** `"profile:healthcare"` | **Namespace prefix:** `hc:`
+
+Applies to grains that handle Protected Health Information (PHI) under HIPAA, health records under HL7 FHIR, or clinical observations. Grains using this profile SHOULD also include `structural_tags` entries from the normative `phi:` tag set (§27.4) when applicable.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `hc:patient_id` | string | when applicable | De-identified patient reference; MUST NOT be a direct identifier unless encryption is active |
+| `hc:encounter_id` | string | no | HL7 FHIR Encounter resource ID |
+| `hc:practitioner_did` | string | no | DID of the treating practitioner or ordering clinician |
+| `hc:icd10` | string[] | no | ICD-10-CM diagnosis codes |
+| `hc:cpt` | string[] | no | CPT procedure codes |
+| `hc:loinc` | string | no | LOINC code for laboratory or clinical observations |
+| `hc:snomed` | string | no | SNOMED CT concept identifier |
+| `hc:fhir_resource` | string | no | FHIR resource type (e.g., `"Observation"`, `"Condition"`, `"MedicationRequest"`) |
+| `hc:fhir_id` | string | no | FHIR resource ID on the source system |
+| `hc:consent_ref` | string | no | Content address of the Consent grain authorizing this PHI grain |
+| `hc:deidentification` | string | no | De-identification method applied: `"safe_harbor"` (45 CFR §164.514(b)) or `"expert_determination"` (45 CFR §164.514(a)) |
+
+**Normative:** Grains with `"profile:healthcare"` and PHI content MUST set `processing_basis: "consent"` (or applicable legal basis) and MUST NOT set `license` to any open license value.
+
+### A.2 Legal Profile (`legal:`)
+
+**Tag:** `"profile:legal"` | **Namespace prefix:** `legal:`
+
+Applies to grains that represent contracts, case law, regulatory filings, legal opinions, or compliance records.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `legal:jurisdiction` | string | recommended | ISO 3166-1 alpha-2 country code or `"EU"`, `"UN"`, etc. |
+| `legal:matter_id` | string | no | Internal matter or case docket identifier |
+| `legal:document_type` | string | no | `"contract"`, `"opinion"`, `"filing"`, `"statute"`, `"regulation"`, `"order"`, `"brief"` |
+| `legal:parties` | string[] | no | DID or identifier of each legal party |
+| `legal:effective_date` | integer | no | Unix epoch ms; date on which the legal instrument takes effect |
+| `legal:expiry_date` | integer | no | Unix epoch ms; date on which the legal instrument expires or is superseded |
+| `legal:citation` | string | no | Formal legal citation string (e.g., `"42 U.S.C. § 1983"`) |
+| `legal:privilege` | string | no | Privilege assertion: `"attorney_client"`, `"work_product"`, `"none"` |
+| `legal:hold_ref` | string | no | Content address of the Invalidation grain placing this grain under litigation hold |
+| `legal:redaction_level` | string | no | `"none"`, `"partial"`, `"full"` |
+
+**Normative:** Grains with `legal:privilege: "attorney_client"` or `"work_product"` MUST have invalidation mode `"hold"` applied before any export or cross-system transfer. Implementations MUST NOT auto-erase held grains (even on GDPR erasure requests) without documented litigation hold lift.
+
+### A.3 Finance Profile (`fin:`)
+
+**Tag:** `"profile:finance"` | **Namespace prefix:** `fin:`
+
+Applies to grains that represent financial transactions, market observations, risk assessments, or regulatory filings (SOX, MiFID II, etc.).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `fin:account_id` | string | no | Obfuscated or tokenized account reference |
+| `fin:instrument_id` | string | no | ISIN, CUSIP, FIGI, or other instrument identifier |
+| `fin:ticker` | string | no | Exchange ticker symbol |
+| `fin:amount` | number | no | Transaction amount |
+| `fin:currency` | string | no | ISO 4217 three-letter currency code |
+| `fin:transaction_type` | string | no | `"debit"`, `"credit"`, `"transfer"`, `"fee"`, `"trade"`, `"settlement"` |
+| `fin:market_timestamp` | integer | no | Exchange-provided timestamp in Unix epoch ms |
+| `fin:venue` | string | no | Trading venue MIC code (ISO 10383) |
+| `fin:strategy_id` | string | no | Quantitative strategy or model identifier |
+| `fin:risk_score` | number | no | Normalized risk score [0.0–1.0] |
+| `fin:sox_control_id` | string | no | SOX internal control identifier for audit trail linkage |
+| `fin:retention_years` | integer | no | Regulatory retention requirement in years (overrides default retention policy) |
+
+**Normative:** Grains with `"profile:finance"` that contain personally identifiable financial information MUST NOT be exported without `processing_basis` set and without applicable consent or contractual basis documented.
+
+### A.4 Robotics Profile (`rob:`)
+
+**Tag:** `"profile:robotics"` | **Namespace prefix:** `rob:`
+
+Applies to grains produced by or about embodied robotic systems operating in physical environments.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `rob:robot_id` | string | recommended | Unique robot platform identifier (URI or DID) |
+| `rob:pose` | object | no | `{x, y, z, roll, pitch, yaw}` in the robot's reference frame |
+| `rob:velocity` | object | no | `{vx, vy, vz}` in m/s |
+| `rob:map_id` | string | no | Identifier of the map or environment model in use |
+| `rob:mission_id` | string | no | Identifier of the current mission or task |
+| `rob:battery_pct` | number | no | Battery charge at observation time [0.0–100.0] |
+| `rob:safety_state` | string | no | `"normal"`, `"warning"`, `"emergency_stop"`, `"recovery"` |
+| `rob:hardware_rev` | string | no | Robot hardware revision string |
+| `rob:firmware_ver` | string | no | Firmware version string |
+| `rob:contact_forces` | object | no | Force/torque sensor readings at contact points |
+| `rob:coordinate_frame` | string | no | Reference frame identifier (e.g., `"world"`, `"odom"`, `"base_link"`) |
+
+### A.5 Science Profile (`sci:`)
+
+**Tag:** `"profile:science"` | **Namespace prefix:** `sci:`
+
+Applies to grains produced in scientific research workflows — experiments, datasets, findings, replication records.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `sci:doi` | string | no | Digital Object Identifier for the source publication or dataset |
+| `sci:arxiv_id` | string | no | arXiv preprint identifier (e.g., `"2501.00123"`) |
+| `sci:pmid` | string | no | PubMed article identifier |
+| `sci:dataset_id` | string | no | Dataset identifier (DOI, Zenodo, Figshare, etc.) |
+| `sci:experiment_id` | string | no | Local experiment or trial identifier |
+| `sci:protocol_id` | string | no | Protocol identifier or URL (e.g., protocols.io DOI) |
+| `sci:hypothesis` | string | no | Free-text hypothesis being tested |
+| `sci:result_status` | string | no | `"positive"`, `"negative"`, `"inconclusive"`, `"replicated"`, `"failed_replication"` |
+| `sci:p_value` | number | no | Statistical p-value of the result [0.0–1.0] |
+| `sci:effect_size` | number | no | Standardized effect size (Cohen's d, r, etc.) |
+| `sci:sample_size` | integer | no | Number of subjects or samples |
+| `sci:preregistered` | boolean | no | Whether the study was pre-registered (e.g., on OSF, AsPredicted) |
+| `sci:open_access` | boolean | no | Whether the source is open access |
+
+### A.6 Consumer Profile (`con:`)
+
+**Tag:** `"profile:consumer"` | **Namespace prefix:** `con:`
+
+Applies to grains produced in consumer-facing agent contexts — personal assistants, recommendation systems, preference learning, and lifestyle applications.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `con:device_type` | string | no | `"mobile"`, `"desktop"`, `"smart_speaker"`, `"wearable"`, `"tv"`, `"kiosk"` |
+| `con:app_id` | string | no | Application or product identifier |
+| `con:app_version` | string | no | Application version string |
+| `con:locale` | string | no | BCP 47 language tag (e.g., `"en-US"`, `"fr-FR"`) |
+| `con:preference_category` | string | no | Domain of the preference (e.g., `"music"`, `"food"`, `"news"`, `"shopping"`) |
+| `con:interaction_type` | string | no | `"explicit_feedback"`, `"implicit_signal"`, `"purchase"`, `"skip"`, `"save"`, `"share"` |
+| `con:sentiment` | number | no | Sentiment score [-1.0 = very negative, 1.0 = very positive] |
+| `con:engagement_duration_ms` | integer | no | Duration of user engagement with the referenced content in milliseconds |
+| `con:recommendation_rank` | integer | no | Position in a recommendation list that triggered the interaction |
+| `con:ab_variant` | string | no | A/B test variant identifier |
+| `con:ccpa_opted_out` | boolean | no | User has exercised CCPA opt-out of sale; MUST NOT be used as a processing basis — use `processing_basis` field instead |
+
+**Normative:** Grains with `"profile:consumer"` that include `user_id` or any direct identifier MUST set `processing_basis` to a lawful basis under GDPR Art. 6 / CCPA § 1798.100 before cross-system transfer. Grains with `con:ccpa_opted_out: true` MUST NOT be included in data sale or data broker transfers.
+
+---
+
+## Appendix B: ABNF Grammar
+
+```abnf
+mg-blob       = version-byte header-fields msgpack-payload
+version-byte  = %x01
+header-fields = flags-byte type-byte ns-hash-bytes created-at-bytes
+                ; version-byte + header-fields = 9-byte "fixed header" in §3.1
+flags-byte    = %x00-FF
+type-byte     = %x01-0A / %xF0-FF
+                ; Belief=0x01, Event=0x02, State=0x03, Workflow=0x04, Action=0x05,
+                ; Observation=0x06, Goal=0x07, Reasoning=0x08, Consensus=0x09,
+                ; Consent=0x0A, 0x0B-0xEF reserved, 0xF0-0xFF domain profile types
+ns-hash-bytes = 2OCTET  ; uint16 big-endian, first two bytes of SHA-256(namespace)
+created-at-bytes = 4OCTET  ; uint32 big-endian
+
+msgpack-payload = canonical-map
+canonical-map = fixmap / map16 / map32
+fixmap        = %x80-8F *key-value
+map16         = %xDE uint16 *key-value
+map32         = %xDF uint32 *key-value
+
+key-value     = msgpack-string msgpack-value
+msgpack-string = fixstr / str8 / str16 / str32  ; UTF-8 NFC-normalized
+msgpack-value = msgpack-string / msgpack-int / msgpack-float
+              / msgpack-bool / msgpack-array / canonical-map
+              / msgpack-null  ; but nulls MUST be omitted from maps
+
+content-address = 64 HEXDIG
+
+mg-file       = magic flags grain-count field-map-ver compression-type
+                reserved offset-table grains footer
+magic         = "MG" %x01
+flags         = %x00-FF
+grain-count   = 4OCTET  ; uint32
+field-map-ver = %x00-FF
+compression-type = %x00-FF
+reserved      = 6OCTET
+offset-table  = *4OCTET  ; grain_count × uint32
+grains        = *mg-blob
+footer        = 32OCTET  ; SHA-256 checksum
+```
+
+---
+
+## Appendix C: Field Mapping Table (Compact Reference)
+
+**Core & Multi-Modal Fields:**
+
+```json
+{
+  "t": "type",
+  "s": "subject",
+  "r": "relation",
+  "o": "object",
+  "c": "confidence",
+  "st": "source_type",
+  "ca": "created_at",
+  "tt": "temporal_type",
+  "vf": "valid_from",
+  "vt": "valid_to",
+  "svf": "system_valid_from",
+  "svt": "system_valid_to",
+  "ctx": "context",
+  "sb": "superseded_by",
+  "ct": "contradicted",
+  "im": "importance",
+  "adid": "author_did",
+  "ns": "namespace",
+  "user": "user_id",
+  "tags": "structural_tags",
+  "df": "derived_from",
+  "cl": "consolidation_level",
+  "sc": "success_count",
+  "fc": "failure_count",
+  "pc": "provenance_chain",
+  "odid": "origin_did",
+  "ons": "origin_namespace",
+  "cr": "content_refs",
+  "er": "embedding_refs",
+  "rt": "related_to",
+  "_e": "_elided",
+  "_do": "_disclosure_of",
+  "ip": "invalidation_policy",
+  "sj": "supersession_justification",
+  "sa": "supersession_auth",
+  "own": "owner",
+  "cat": "category",
+  "rid": "run_id",
+  "role": "role",
+  "ac": "access_count",
+  "laa": "last_accessed_at",
+  "tms": "timestamp_ms",
+  "obsdid": "observer_did",
+  "sdid": "subject_did",
+  "gdid": "grantee_did",
+  "sid2": "session_id",
+  "eid": "entity_id",
+  "epstat": "epistemic_status",
+  "vstatus": "verification_status",
+  "rhr": "requires_human_review",
+  "pbasis": "processing_basis",
+  "idst": "identity_state",
+  "lic": "license",
+  "tts": "trusted_timestamp",
+  "itype": "invalidation_type",
+  "ireason": "invalidation_reason",
+  "iinit": "invalidation_initiator",
+  "rpol": "retention_policy",
+  "rpri": "recall_priority",
+  "scope": "scope",
+  "isw": "is_withdrawal",
+  "basis": "basis",
+  "jur": "jurisdiction",
+  "pcon": "prior_consent",
+  "wdids": "witness_dids",
+  "prem": "premises",
+  "conc": "conclusion",
+  "imethod": "inference_method",
+  "altc": "alternatives_considered",
+  "statctx": "statistical_context",
+  "swenv": "software_environment",
+  "params": "parameter_set",
+  "rseed": "random_seed"
+}
+```
+
+**Action-Specific Fields:**
+
+```json
+{
+  "aphase": "action_phase",
+  "tn": "tool_name",
+  "inp": "input",
+  "cnt": "content",
+  "iserr": "is_error",
+  "tcid": "tool_call_id",
+  "cbid": "call_batch_id",
+  "ttype": "tool_type",
+  "tver": "tool_version",
+  "emode": "execution_mode",
+  "code": "code",
+  "out": "stdout",
+  "err2": "stderr",
+  "xc": "exit_code",
+  "iid": "interpreter_id",
+  "err": "error",
+  "etype": "error_type",
+  "dur": "duration_ms",
+  "ptid": "parent_task_id",
+  "tdesc": "tool_description",
+  "isch": "input_schema",
+  "strict": "strict"
+}
+```
+
+**Consensus-Specific Fields:**
+
+```json
+{
+  "pobs": "participating_observers",
+  "thold": "threshold",
+  "agcnt": "agreement_count",
+  "discnt": "dissent_count",
+  "disgrn": "dissent_grains",
+  "agcon": "agreed_content"
+}
+```
+
+**Observation-Specific Fields:**
+
+```json
+{
+  "oid": "observer_id",
+  "otype": "observer_type",
+  "fid": "frame_id",
+  "sg": "sync_group",
+  "omode": "observation_mode",
+  "oscope": "observation_scope",
+  "omdl": "observer_model",
+  "ocmp": "compression_ratio"
+}
+```
+
+**Goal-Specific Fields:**
+
+```json
+{
+  "desc": "description",
+  "gs": "goal_state",
+  "crit": "criteria",
+  "crs": "criteria_structured",
+  "pri": "priority",
+  "pgs": "parent_goals",
+  "sr": "state_reason",
+  "se": "satisfaction_evidence",
+  "prog": "progress",
+  "dto": "delegate_to",
+  "dfo": "delegate_from",
+  "ep": "expiry_policy",
+  "rec": "recurrence",
+  "evreq": "evidence_required",
+  "rof": "rollback_on_failure",
+  "atr": "allowed_transitions"
+}
+```
+
+**Content Reference Nested Compaction:**
+
+```json
+{
+  "u": "uri",
+  "m": "modality",
+  "mt": "mime_type",
+  "sz": "size_bytes",
+  "ck": "checksum",
+  "md": "metadata"
+}
+```
+
+**Embedding Reference Nested Compaction:**
+
+```json
+{
+  "vi": "vector_id",
+  "mo": "model",
+  "dm": "dimensions",
+  "ms": "modality_source",
+  "di": "distance_metric"
+}
+```
+
+**Related-To Nested Compaction:**
+
+```json
+{
+  "h": "hash",
+  "rl": "relation_type",
+  "w": "weight"
+}
+```
+
+---
+
+## Appendix D: Compliance Mapping
+
+### GDPR
+
+| Article | .mg Support |
+|---------|------------|
+| Art. 5 (Data minimization) | `user_id` field enables per-person scope |
+| Art. 12-23 (Rights) | Structured data format for automated response |
+| Art. 17 (Erasure) | Crypto-erasure via key destruction |
+| Art. 25 (Privacy by design) | Provenance and audit built-in |
+| Art. 30 (Records of processing) | `provenance_chain` and `created_at` timestamps support records-of-processing obligations |
+| Art. 32 (Security) | COSE signing, AES-256-GCM encryption |
+
+### HIPAA (45 CFR §164)
+
+| Section | .mg Support |
+|---------|------------|
+| §164.308 (Administrative) | Audit trail via `provenance_chain` |
+| §164.310 (Physical) | N/A (transport layer) |
+| §164.312 (Technical) | AES-256-GCM encryption, COSE signatures |
+| §164.314 (Organizational) | N/A (policy engine) |
+
+### CCPA
+
+| Requirement | .mg Support |
+|------------|------------|
+| Personal information collection | `user_id` and `structural_tags` for classification |
+| Disclosure | Selective disclosure hides sensitive fields |
+| Deletion | Crypto-erasure via key destruction |
+| Opt-out | Policy-layer enforcement (outside .mg) |
+
+---
+
+## Appendix E: Version History
+
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
+
+
+---
+
+---
+
+## Appendix F: Glossary
+
+- **Blob:** Complete .mg binary (9-byte fixed header + MessagePack payload)
 - **Grain:** Atomic knowledge unit; identified by content address
 - **Content address:** SHA-256 hash of blob bytes; unique identifier
 - **Canonical:** Deterministic serialization rules ensuring identical bytes
@@ -2271,23 +3067,39 @@ The `observation_scope` field is a **closed enum**. It describes the temporal br
 - **Provenance:** Derivation trail showing how grain was created
 - **Cross-link:** Semantic relationship between grains
 - **Bi-temporal:** Tracking both event-time and system-time dimensions
+- **Belief:** Grain type 0x01 — a held claim, factual statement, or declarative knowledge about the world
+- **Event:** Grain type 0x02 — a discrete occurrence with start/end time
+- **State:** Grain type 0x03 — a persisting condition or status at a point in time
+- **Workflow:** Grain type 0x04 — a structured process or multi-step plan
+- **Action:** Grain type 0x05 — a completed tool invocation, API call, or agent action
+- **Observation:** Grain type 0x06 — a raw sensor or environmental reading without interpretation
+- **Goal:** Grain type 0x07 — a desired future state or objective
+- **Reasoning:** Grain type 0x08 — an inference chain, chain-of-thought, or decision rationale
+- **Consensus:** Grain type 0x09 — an agreement reached among multiple agents or sources
+- **Consent:** Grain type 0x0A — a data subject's GDPR/CCPA/LGPD/PIPL consent or withdrawal record
+- **processing_basis:** Legal basis for processing personal data under GDPR Art. 6 (consent, contract, legal_obligation, vital_interests, public_task, legitimate_interests)
+- **consent_cascade:** Invalidation mode that propagates erasure/restriction to all grains linked via `processing_basis` when a Consent grain is invalidated
+- **verification_status:** Lifecycle verification state of a grain's content: `"unverified"` (default — not yet reviewed), `"verified"` (confirmed correct by an authority), `"contested"` (contradicted or disputed), `"retracted"` (withdrawn from use)
+- **run_id:** Session or execution scope identifier; distinct from user_id (data subject) and namespace (logical partition)
 - **Crypto-erasure:** Destroying encryption key to unrecoverably erase data
 - **Blind index:** HMAC token for searching encrypted data without decryption
 
 ---
 
-## Appendix F: Complete Example Grain
+## Appendix G: Complete Example Grain
 
 ```python
-# Create a fact grain
+# Create a belief grain
 grain = {
-    "type": "fact",
+    "type": "belief",
     "subject": "machine-learning",
     "relation": "is_subset_of",
     "object": "artificial-intelligence",
     "confidence": 0.99,
+    "epistemic_status": "accepted",
     "source_type": "user_explicit",
     "created_at": 1737000000000,
+    "timestamp_ms": 1737000000000,
     "namespace": "knowledge-base",
     "author_did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
     "user_id": "researcher-alice",
@@ -2312,7 +3124,8 @@ grain = {
 # 3. NFC-normalize strings
 # 4. Sort keys lexicographically
 # 5. Encode as canonical MessagePack
-# 6. Prepend 9-byte fixed header (1-byte version + 8-byte header: flags, type, ns_hash[2], created_at[4])
+# 6. Prepend 9-byte fixed header: version(1) + flags(1) + type(1) + ns_hash(2) + created_at(4)
+#    type byte = 0x01 (Belief)
 # 7. Compute SHA-256 hash
 
 blob = serialize(grain)
@@ -2324,7 +3137,7 @@ content_address = sha256(blob).hex()
 
 ---
 
-**Document Status:** This is the initial publication of the .mg format specification, submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
+**Document Status:** This is a v1.2 revision of the .mg format specification. This revision introduces the cognitive grain type model (Belief, Event, State, Workflow, Action, Observation, Goal, Reasoning, Consensus, Consent), reduces the fixed header from 10 to 9 bytes by removing the Category byte, and adds domain profile extensions. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
-**Last Updated:** 2026-02-17
+**Last Updated:** 2026-02-23
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
