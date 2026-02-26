@@ -13,7 +13,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ### Breaking changes
 
-None. Binary wire format is unchanged from v1.1. The fixed header returns to 9 bytes (the Category byte introduced in v1.2-draft is removed). Type string renames are backwards-compatible via mandatory reader aliases.
+- **Type renames are not backwards-compatible:** `"fact"` → `"belief"`, `"episode"` → `"event"`, `"checkpoint"` → `"state"`, `"tool_call"` → `"action"`. Legacy type strings are not accepted; no prior implementation exists.
+- **Removed legacy Action short keys** `arguments`/`args`, `result`/`res`, `success`/`ok` — use `input`/`inp`, `content`/`cnt`, `is_error`/`iserr` exclusively.
+- **Removed legacy Observation short keys** `sid` (`sensor_id`) and `stype` (`sensor_type`) — use `oid` and `otype` exclusively.
+- **Removed `contradicted` field** — use `verification_status` exclusively.
+- Binary wire format is otherwise unchanged from v1.1. The fixed header returns to 9 bytes (the Category byte introduced in v1.2-draft is removed).
 
 ### Added
 
@@ -49,12 +53,12 @@ None. Binary wire format is unchanged from v1.1. The fixed header returns to 9 b
 - **Domain Profile Extension Model** — profile declaration via `structural_tags`; namespace prefixes `hc:`, `legal:`, `fin:`, `rob:`, `sci:`, `con:`
 - **Appendix A: Domain Profile Registry** — Healthcare (0xF0–0xF3), Legal (0xF4–0xF6), Finance (0xF7–0xFA), Robotics (0xFB–0xFF), Science (field extensions), Consumer (field extensions)
 
-### Changed (backwards-compatible)
+### Changed
 
 - **Header reverts to 9 bytes** — Category byte (Byte 3) removed from fixed header; `category` remains as optional payload field
 - **`created_at` in header is now normatively a routing hint only** — MUST NOT be used as authoritative event timestamp; use `timestamp_ms` payload field instead
 - **Type renames:** Fact → Belief (0x01), Episode → Event (0x02), Checkpoint → State (0x03), ToolCall → Action (0x05). Workflow, Observation, Goal unchanged.
-- **Ownership grain** uses `mg:owned_by` relation on Belief type instead of legacy `"fact"` type with `"owned_by"` relation
+- **Ownership grain** uses `mg:owned_by` relation on Belief type instead of the old `"fact"` type with `"owned_by"` relation
 - **Application-defined type range** (0xF0–0xFF) documented as domain profile conventions in Appendix A
 - **Minimum blob size** is 10 bytes (9-byte header + 1-byte empty MessagePack map)
 - **§27 Category Registry** replaced by §27 Grain Type Field Specifications
@@ -62,10 +66,10 @@ None. Binary wire format is unchanged from v1.1. The fixed header returns to 9 b
 - **Belief `object` now accepts map in addition to string** — enables structured object values for complex relation triples
 - **Goal `subject` and `source_type` are no longer required** — moved to optional fields; `description`, `goal_state`, and `created_at` are the only required fields
 
-### Deprecated
+### Removed
 
-- **Action fields:** `arguments` (`args`), `result` (`res`), `success` (`ok`). Use `input` (`inp`), `content` (`cnt`), `is_error` (`iserr`). Deprecated aliases removed in v2.0.
-- **`contradicted` (bool, short key `ct`).** Use `verification_status`. Readers MUST map `contradicted: true` → `verification_status: "contested"`. Removed in v2.0.
+- **Action fields `arguments`/`args`, `result`/`res`, `success`/`ok`** — removed immediately; no prior implementation exists. Use `input`/`inp`, `content`/`cnt`, `is_error`/`iserr`.
+- **`contradicted` (bool, short key `ct`)** — removed immediately; no prior implementation exists. Use `verification_status`.
 
 ---
 
@@ -89,9 +93,9 @@ None. Binary wire format is unchanged from v1.1. The fixed header returns to 9 b
 - Level 2 conformance: SHOULD warn when `observer_model` is absent for cognitive observer types
 - Level 3 conformance: SHOULD partition Observation grain storage by observer domain
 
-### Deprecated
+### Removed in v1.2
 
-- Short keys `sid` (sensor_id) and `stype` (sensor_type) from v1.0 — accepted by readers until v2.0; writers MUST emit `oid` and `otype`
+- Short keys `sid` (`sensor_id`) and `stype` (`sensor_type`) from v1.0 — removed in v1.2; no prior implementation exists. Use `oid` and `otype`.
 
 ---
 

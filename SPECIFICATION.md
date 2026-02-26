@@ -175,32 +175,20 @@ Hexadecimal values are lowercase. Byte sequences are represented in hex with spa
 
 **Byte 2 — Type (cognitive grain type):**
 
-| Value | Type | Description | Formerly |
-|-------|------|-------------|----------|
-| 0x01 | **Belief** | Structured belief — (subject, relation, object) triple with confidence and source | Fact |
-| 0x02 | **Event** | Timestamped occurrence — message, interaction, or behavioral event | Episode |
-| 0x03 | **State** | Agent state snapshot — portable save point | Checkpoint |
-| 0x04 | **Workflow** | Learned action sequence — procedural memory | Workflow |
-| 0x05 | **Action** | Tool invocation or code execution | ToolCall |
-| 0x06 | **Observation** | Raw sensory or cognitive input | Observation |
-| 0x07 | **Goal** | Objective with lifecycle semantics | Goal |
-| 0x08 | **Reasoning** | Inference chain and thought audit trail | |
-| 0x09 | **Consensus** | Multi-agent agreement record | |
-| 0x0A | **Consent** | Permission grant or withdrawal — DID-scoped, purpose-bounded | |
-| 0x0B–0xEF | Reserved | Future standard types | |
-| 0xF0–0xFF | Domain profile types | Application-defined per Appendix A domain profiles | |
-
-**Note on renamed types:** Readers MUST accept both legacy and canonical type strings. Writers MUST emit canonical names.
-
-| Legacy payload string | Canonical payload string | Byte |
-|---------------------|---------------------|------|
-| `"fact"` | `"belief"` | 0x01 |
-| `"episode"` | `"event"` | 0x02 |
-| `"checkpoint"` | `"state"` | 0x03 |
-| `"workflow"` | `"workflow"` | 0x04 |
-| `"tool_call"` | `"action"` | 0x05 |
-| `"observation"` | `"observation"` | 0x06 |
-| `"goal"` | `"goal"` | 0x07 |
+| Value | Type | Description |
+|-------|------|-------------|
+| 0x01 | **Belief** | Structured belief — (subject, relation, object) triple with confidence and source |
+| 0x02 | **Event** | Timestamped occurrence — message, interaction, or behavioral event |
+| 0x03 | **State** | Agent state snapshot — portable save point |
+| 0x04 | **Workflow** | Learned action sequence — procedural memory |
+| 0x05 | **Action** | Tool invocation or code execution |
+| 0x06 | **Observation** | Raw sensory or cognitive input |
+| 0x07 | **Goal** | Objective with lifecycle semantics |
+| 0x08 | **Reasoning** | Inference chain and thought audit trail |
+| 0x09 | **Consensus** | Multi-agent agreement record |
+| 0x0A | **Consent** | Permission grant or withdrawal — DID-scoped, purpose-bounded |
+| 0x0B–0xEF | Reserved | Future standard types |
+| 0xF0–0xFF | Domain profile types | Application-defined per Appendix A domain profiles |
 
 **Bytes 3-4 — Namespace Hash:** First two bytes of SHA-256(namespace), encoded as `uint16` big-endian. Provides 65,536 routing buckets without deserialization. Full namespace string remains authoritative in payload. This field is a routing hint only and MUST NOT be used for security decisions (see §13.3, §20).
 
@@ -447,10 +435,10 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `timestamp_ms` | `tms` | int64 | High-precision payload timestamp (epoch ms). The authoritative event timestamp. The header's `created_at_sec` is a coarse routing hint only. |
 | `observer_did` | `obsdid` | string | DID of the entity that observed or measured — distinct from `author_did` (who wrote the grain into the store). |
 | `subject_did` | `sdid` | string | DID of the entity this grain is **about** — distinct from `user_id` (GDPR data subject) and `author_did` (writer). |
-| `session_id` | `sid2` | string | Session scope — distinct from `run_id` (execution scope) and `user_id` (data subject). Uses short key `sid2` to avoid collision with deprecated Observation short key `sid`. |
+| `session_id` | `sid2` | string | Session scope — distinct from `run_id` (execution scope) and `user_id` (data subject). |
 | `entity_id` | `eid` | string | External entity reference — product ID, patient MRN, vehicle chassis ID, instrument serial. Not a DID; opaque to the spec. |
 | `epistemic_status` | `epstat` | string | Categorical certainty: `"certain"`, `"probable"`, `"uncertain"`, `"estimated"`, `"derived"`. Complements the continuous `confidence` float. Open enum. |
-| `verification_status` | `vstatus` | string | Replaces the deprecated `contradicted` boolean. Values: `"unverified"` (default), `"verified"`, `"contested"`, `"retracted"`. Readers MUST map `contradicted: true` → `verification_status: "contested"`. |
+| `verification_status` | `vstatus` | string | Values: `"unverified"` (default), `"verified"`, `"contested"`, `"retracted"`. |
 | `requires_human_review` | `rhr` | bool | If `true`, this grain's content MUST NOT drive automated decisions until a human has reviewed and cleared it. Binding for Reasoning grains; advisory for others. |
 | `processing_basis` | `pbasis` | string | Content address of the Consent grain that authorized this grain's creation. Used to compute erasure scope on consent revocation. |
 | `identity_state` | `idst` | string | Identity resolution state: `"anonymous"`, `"pseudonymous"`, `"authenticated"`. Affects personalization logic and compliance scope. |
@@ -463,8 +451,6 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `recall_priority` | `rpri` | string | Retrieval priority hint: `"hot"`, `"warm"`, `"cold"`. Guides index layer storage tier selection. |
 
 > **Note — `source_type` for Observation grains:** Use `"sensor"` when `observer_type` is a physical instrument; `"agent_inferred"` when `observer_type` is a cognitive AI observer (`"llm"`, `"reflector"`, `"classifier"`, `"detector"`); `"user_explicit"` for human observers.
-
-**Deprecated:** `contradicted` (bool, short key `ct`). Writers MUST emit `verification_status` instead. Readers MUST accept `contradicted: true` and map it to `verification_status: "contested"`. The `contradicted` field will be removed in v2.0.
 
 > **Index-layer fields (§5.6, §28.3):** The following fields in the table above are **not stored in the immutable .mg blob**. They are maintained by the store/index layer and are excluded from the content address and COSE signature: `superseded_by`, `system_valid_to`, `verification_status`, `access_count`, `last_accessed_at`. Writers MUST NOT set these fields; see §28.3 for store update rules.
 
@@ -482,7 +468,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 
 > **Note — `content_blocks` schema:** Each block in the array MUST contain a `type` field. Standard block types mirror the Anthropic Messages API: `"text"` (`{type, text}`), `"image"` (`{type, source}`), `"tool_use"` (`{type, id, name, input}`), `"tool_result"` (`{type, tool_use_id, content, is_error}`), `"thinking"` (`{type, thinking}`). Implementations MAY define additional block types. When `content_blocks` is present and `content` is also present, `content` serves as a plain-text fallback for readers that do not support structured blocks.
 
-### 6.3 Checkpoint-Specific Fields
+### 6.3 State-Specific Fields
 
 | Full Name | Short Key | Type |
 |-----------|-----------|------|
@@ -523,30 +509,18 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `input_schema` | `isch` | map | JSON Schema for tool inputs; mirrors Anthropic `input_schema` / MCP `inputSchema` (definition phase) |
 | `strict` | `strict` | bool | If `true`, model guarantees strict JSON Schema conformance for `input` (definition phase) |
 
-**Deprecated fields:**
-
-| Deprecated Full Name | Deprecated Short Key | Canonical Replacement |
-|---|---|---|
-| `arguments` | `args` | `input` / `inp` |
-| `result` | `res` | `content` / `cnt` |
-| `success` | `ok` | `is_error` / `iserr` (inverted polarity) |
-
-Readers MUST accept deprecated short keys and map them to canonical names. Writers MUST emit canonical names. Deprecated aliases will be removed in v2.0.
-
 ### 6.6 Observation-Specific Fields
 
-| Full Name | Short Key | Type | Deprecated Full Name (v1.0) | Deprecated Short Key (v1.0) |
-|-----------|-----------|------|-----------------------------|-----------------------------|
-| `observer_id` | `oid` | string | `sensor_id` | `sid` |
-| `observer_type` | `otype` | string | `sensor_type` | `stype` |
-| `frame_id` | `fid` | string | — | — |
-| `sync_group` | `sg` | string | — | — |
-| `observation_mode` | `omode` | string | — | — |
-| `observation_scope` | `oscope` | string | — | — |
-| `observer_model` | `omdl` | string | — | — |
-| `compression_ratio` | `ocmp` | float64 | — | — |
-
-**Backward compatibility:** Readers MUST accept the deprecated short keys `sid` and `stype` and map them to `observer_id` and `observer_type` respectively. Writers MUST emit `oid` and `otype` and MUST NOT emit `sid` or `stype`. The deprecated aliases will be removed in v2.0. All existing v1.0 Observation grains remain valid under v1.1 readers without any migration of stored data.
+| Full Name | Short Key | Type |
+|-----------|-----------|------|
+| `observer_id` | `oid` | string |
+| `observer_type` | `otype` | string |
+| `frame_id` | `fid` | string |
+| `sync_group` | `sg` | string |
+| `observation_mode` | `omode` | string |
+| `observation_scope` | `oscope` | string |
+| `observer_model` | `omdl` | string |
+| `compression_ratio` | `ocmp` | float64 |
 
 ### 6.7 Goal-Specific Fields
 
@@ -751,12 +725,10 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 
 ### 8.1 Belief (type = 0x01)
 
-*Formerly: Fact*
-
 A structured belief about the world — a (subject, relation, object) triple with confidence and source. The canonical unit of declarative knowledge.
 
 **Required fields:**
-- `type` = "belief" (payload string; header byte = `0x01`; legacy `"fact"` accepted)
+- `type` = "belief" (payload string; header byte = `0x01`)
 - `subject` (non-empty string)
 - `relation` (non-empty string)
 - `object` (string or map)
@@ -769,12 +741,10 @@ A structured belief about the world — a (subject, relation, object) triple wit
 
 ### 8.2 Event (type = 0x02)
 
-*Formerly: Episode*
-
 A raw, timestamped record of something that happened — a message, interaction, utterance, or behavioral occurrence.
 
 **Required fields:**
-- `type` = "event" (legacy `"episode"` accepted)
+- `type` = "event"
 - `content` (non-empty string) — raw text. MAY be omitted if `subject`/`relation`/`object` fully describe the event.
 - `created_at` (int64, epoch ms)
 
@@ -782,12 +752,10 @@ A raw, timestamped record of something that happened — a message, interaction,
 
 ### 8.3 State (type = 0x03)
 
-*Formerly: Checkpoint*
-
 An agent state snapshot — the portable save point at a moment in time.
 
 **Required fields:**
-- `type` = "state" (legacy `"checkpoint"` accepted)
+- `type` = "state"
 - `context` (map) — agent state snapshot. For Letta-compatible agents, SHOULD include `memory_blocks`, `system_prompt`, `tools`, `model`.
 - `created_at` (int64, epoch ms)
 
@@ -807,12 +775,10 @@ Learned action sequence — procedural memory for recurring tasks.
 
 ### 8.5 Action (type = 0x05)
 
-*Formerly: ToolCall*
-
 A record of a tool invocation, code execution, or computer-use action. See §27.1 for the full `action_phase` discriminator and field tables.
 
 **Required fields:**
-- `type` = "action" (legacy `"tool_call"` accepted)
+- `type` = "action"
 - Phase-dependent required fields (see §27.1)
 - `created_at` (int64, epoch ms)
 
@@ -1341,7 +1307,7 @@ Prefixes not listed here MUST be preserved as-is. New prefixes do not require a 
 
 #### 12.5.3 Ownership Belief Grain Convention
 
-Agent ownership is expressed as a Belief grain with `relation: "mg:owned_by"` in the `"agent:identity"` namespace. The `object` field carries the owner's legal name as a string (for semantic triple completeness and backward-compatible querying). The structured `owner` field carries the full LegalEntity map.
+Agent ownership is expressed as a Belief grain with `relation: "mg:owned_by"` in the `"agent:identity"` namespace. The `object` field carries the owner's legal name as a string (for semantic triple completeness). The structured `owner` field carries the full LegalEntity map.
 
 This grain MUST be written by the operator at agent provisioning time. It MUST carry an `invalidation_policy` (§23) restricting supersession to the owner's authorized DID. It SHOULD be COSE-signed (§9) by the owner's DID.
 
@@ -1662,7 +1628,6 @@ Implementations MUST declare which level they support:
 - Support all ten standard grain types (0x01–0x0A) per §8 schemas
 - Ignore unknown fields
 - Constant-time hash comparison
-- MUST accept deprecated short keys `sid` and `stype` in Observation grains and map them to `observer_id` and `observer_type` respectively
 
 Level 1 is sufficient for reading, verifying, and storing grains.
 
@@ -1680,7 +1645,7 @@ All Level 1 requirements, plus:
 - Apply fail-closed rule: unknown `invalidation_policy.mode` values MUST be treated as `mode: "locked"`
 - Enforce the `replaces` non-supersession rule: `relation_type: "replaces"` MUST NOT trigger index mutations on the target grain
 - MUST validate that `observer_type` is a non-empty string; MUST NOT reject unknown `observer_type` values (open enum)
-- MUST emit `oid` and `otype` short keys; MUST NOT emit deprecated `sid` or `stype`
+- MUST emit `oid` and `otype` short keys
 - SHOULD warn (but MUST NOT reject) when `observer_model` is absent on Observation grains where `observer_type` is `"llm"`, `"reflector"`, `"classifier"`, or `"detector"`
 
 ### 17.3 Level 3: Production Store
@@ -1876,16 +1841,16 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 69 74 a1 74 a4 66 61 63 74
 ```
 
-> Header breakdown: `01`=version, `00`=flags (public, MessagePack, unsigned), `01`=Belief type (formerly Fact), `a4 d2`=SHA-256("shared")[0:2] as uint16 big-endian, `69 68 ba a0`=created_at_sec (1768471200 = 2026-01-15T10:00:00Z, big-endian).
+> Header breakdown: `01`=version, `00`=flags (public, MessagePack, unsigned), `01`=Belief type, `a4 d2`=SHA-256("shared")[0:2] as uint16 big-endian, `69 68 ba a0`=created_at_sec (1768471200 = 2026-01-15T10:00:00Z, big-endian).
 >
 > Payload breakdown: `89`=fixmap(9), `a4 61 64 69 64`=key "adid" (fixstr 4), `d9 38`=str8 length 56, followed by 56 UTF-8 bytes of the DID; key `c` value: `cb 3f ec cc cc cc cc cc cd` (float64 marker + 8 bytes = `3feccccccccccccd` = 0.9); then remaining keys "ca"/"ns"/"o"/"r"/"s"/"st"/"t" in lexicographic order with their values.
 
-### 21.2 Vector 2: Episode
+### 21.2 Vector 2: Event
 
 **Input:**
 ```json
 {
-  "type": "episode",
+  "type": "event",
   "content": "User asked about dark mode settings",
   "created_at": 1768471200000,
   "namespace": "shared",
@@ -1899,12 +1864,12 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 [computed by reference implementation]
 ```
 
-### 21.3 Vector 3: Bi-Temporal Fact
+### 21.3 Vector 3: Bi-Temporal Belief
 
 **Input:**
 ```json
 {
-  "type": "fact",
+  "type": "belief",
   "subject": "Alice",
   "relation": "works_at",
   "object": "Acme Corp",
@@ -1923,12 +1888,12 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 [computed by reference implementation]
 ```
 
-### 21.4 Vector 4: Fact with Cross-Links
+### 21.4 Vector 4: Belief with Cross-Links
 
 **Input:**
 ```json
 {
-  "type": "fact",
+  "type": "belief",
   "subject": "Bob",
   "relation": "manages",
   "object": "Project Alpha",
@@ -2388,16 +2353,6 @@ The `action_phase` field acts as a discriminator for async vs. synchronous tool 
 | `"code_exec"` | CodeAct-style: `code` field holds executable Python/shell; result in `stdout`/`stderr` |
 | `"computer_use"` | Anthropic computer-use tool; `input` holds action type and coordinates |
 
-**Deprecated Action fields:**
-
-| Deprecated Full Name | Deprecated Short Key | Canonical Replacement |
-|---|---|---|
-| `arguments` | `args` | `input` / `inp` |
-| `result` | `res` | `content` / `cnt` |
-| `success` | `ok` | `is_error` / `iserr` (inverted polarity) |
-
-Readers MUST accept deprecated short keys and map them to canonical names. Writers MUST emit canonical names. Deprecated aliases removed in v2.0.
-
 ---
 
 **Example 0 — Tool definition grain:**
@@ -2582,7 +2537,6 @@ The following fields are updated by the **store/index layer** after initial writ
 | `superseded_by` | A superseding grain is accepted |
 | `system_valid_to` | Grain is superseded or contradicted |
 | `verification_status` | Verification, contestation, or retraction occurs |
-| `contradicted` | Contradiction index mutation (§23.7) — deprecated, use `verification_status` |
 | `access_count` | Grain is retrieved by a search or get operation (see §22.10 for semantics) |
 | `last_accessed_at` | Grain is retrieved by a search or get operation (see §22.10 for semantics) |
 
@@ -2971,8 +2925,6 @@ footer        = 32OCTET  ; SHA-256 checksum
 }
 ```
 
-> **Deprecated Action short keys (accepted by readers until v2.0):** `"args"` → `input`, `"res"` → `content`, `"ok"` → `is_error` (inverted polarity)
-
 **Consensus-Specific Fields:**
 
 ```json
@@ -3000,8 +2952,6 @@ footer        = 32OCTET  ; SHA-256 checksum
   "ocmp": "compression_ratio"
 }
 ```
-
-> **Deprecated short keys (accepted by readers until v2.0):** `"sid"` → `observer_id`, `"stype"` → `observer_type`
 
 **Goal-Specific Fields:**
 
@@ -3117,11 +3067,11 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 - **Provenance:** Derivation trail showing how grain was created
 - **Cross-link:** Semantic relationship between grains
 - **Bi-temporal:** Tracking both event-time and system-time dimensions
-- **Belief:** Grain type 0x01 — a held claim, factual statement, or declarative knowledge about the world (formerly "Fact" / "Statement/Knowledge")
-- **Event:** Grain type 0x02 — a discrete occurrence with start/end time (formerly "Episode" / "Statement/Episodic")
-- **State:** Grain type 0x03 — a persisting condition or status at a point in time (formerly "Checkpoint")
+- **Belief:** Grain type 0x01 — a held claim, factual statement, or declarative knowledge about the world
+- **Event:** Grain type 0x02 — a discrete occurrence with start/end time
+- **State:** Grain type 0x03 — a persisting condition or status at a point in time
 - **Workflow:** Grain type 0x04 — a structured process or multi-step plan
-- **Action:** Grain type 0x05 — a completed tool invocation, API call, or agent action (formerly "ToolCall")
+- **Action:** Grain type 0x05 — a completed tool invocation, API call, or agent action
 - **Observation:** Grain type 0x06 — a raw sensor or environmental reading without interpretation
 - **Goal:** Grain type 0x07 — a desired future state or objective
 - **Reasoning:** Grain type 0x08 — an inference chain, chain-of-thought, or decision rationale
@@ -3139,7 +3089,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 ## Appendix G: Complete Example Grain
 
 ```python
-# Create a belief grain (Belief type — formerly "statement"/"knowledge")
+# Create a belief grain
 grain = {
     "type": "belief",
     "subject": "machine-learning",
