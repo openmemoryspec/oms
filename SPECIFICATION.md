@@ -427,7 +427,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `supersession_justification` | `sj` | string | Required on superseding grain when original has `mode: "soft_locked"` |
 | `supersession_auth` | `sa` | array | COSE signatures authorizing supersession for `mode: "quorum"` |
 | `owner` | `own` | map | LegalEntity map (§12.5.1) — legal entity with rights and liabilities over the agent |
-| `category` | `cat` | uint8 | Routing category within the grain type — see §27 Category Registry |
+| `category` | `cat` | uint8 | Routing category within the grain type — see §27 Grain Type Field Specifications |
 | `run_id` | `rid` | string | Session or run identifier — scopes grain to a specific agent execution. Distinct from `user_id` (data subject) and `namespace` (logical partition). |
 | `role` | `role` | string | Message role for Event grains — open enum, standard values: `"user"`, `"assistant"`, `"system"`, `"tool"` |
 | `access_count` | `ac` | int | Number of times this grain has been retrieved — updated by the store on reads, not by the writer. Enables recency/frequency scoring. |
@@ -2504,7 +2504,7 @@ Triggers observe external systems for changes (new events, incoming webhooks, sc
 |---|---|
 | `observer_id` | Connector name (e.g., `"github"`, `"stripe"`) |
 | `observer_type` | Trigger mechanism: `"trigger:polling"`, `"trigger:webhook"`, `"trigger:schedule"`, `"trigger:listener"` |
-| `observation_mode` | `"periodic"` (polling), `"continuous"` (webhook), `"scheduled"` (cron) |
+| `observation_mode` | `"periodic"` (polling), `"continuous"` (webhook/listener), `"scheduled"` (cron) |
 | `observation_scope` | What is being watched (e.g., `"repos/{owner}/{repo}/issues"`) |
 | `context` | Trigger-specific configuration using `int:` prefixed fields from the Integration profile (§A.7) |
 
@@ -2524,6 +2524,7 @@ Implementations MAY index Observation grains whose `observer_type` starts with `
   "context": {
     "int:http_method": "GET",
     "int:http_path": "/repos/{owner}/{repo}/issues",
+    "int:path_params": ["owner", "repo"],
     "int:poll_interval_secs": 300,
     "int:cursor_field": "since",
     "int:cursor_type": "timestamp",
@@ -3256,8 +3257,8 @@ footer        = 32OCTET  ; SHA-256 checksum
 ```json
 {
   "ib": "int:base_url",
-  "im": "int:http_method",
-  "ip": "int:http_path",
+  "ihm": "int:http_method",
+  "ihp": "int:http_path",
   "ipp": "int:path_params",
   "iqp": "int:query_params",
   "ibp": "int:body_params",
@@ -3273,13 +3274,13 @@ footer        = 32OCTET  ; SHA-256 checksum
   "ict": "int:content_type",
   "ipis": "int:poll_interval_secs",
   "icf": "int:cursor_field",
-  "ict2": "int:cursor_type",
+  "icft": "int:cursor_type",
   "iwp": "int:webhook_path",
   "iwsh": "int:webhook_secret_header",
   "icron": "int:cron_expression",
   "itz": "int:timezone",
-  "icfgs": "int:config_schema",
-  "ievs": "int:event_schema"
+  "icfg": "int:config_schema",
+  "ievt": "int:event_schema"
 }
 ```
 
@@ -3411,5 +3412,5 @@ content_address = sha256(blob).hex()
 
 **Document Status:** This is a v1.3 revision of the .mg format specification. This revision adds `output_schema` to the Action grain definition phase, introduces the Integration domain profile (`profile:integration`) for REST API connectors and tool catalogs, documents trigger definition conventions via Observation grains, and documents Consensus grain usage patterns for multi-source action definition validation. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
-**Last Updated:** 2026-02-28
+**Last Updated:** 2026-03-03
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)

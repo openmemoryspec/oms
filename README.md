@@ -1,6 +1,6 @@
 # Open Memory Specification (OMS)
 
-**Version:** 1.2 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
+**Version:** 1.3 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
 
 OMS is an open standard for portable, auditable, and interoperable agent memory across autonomous systems, AI agents, and distributed knowledge networks.
 

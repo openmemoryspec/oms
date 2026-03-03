@@ -9,17 +9,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [1.3] — 2026-02-28
+## [1.3] — 2026-03-03
 
 ### Added
 
 - **Action grain `output_schema` field** — JSON Schema (draft-07 compatible) describing the action's return value; optional in definition phase, omitted in all other phases. Compact key: `osch`. Enables LLMs to plan multi-step workflows without trial executions by knowing what each tool produces.
 - **Integration Domain Profile (`profile:integration`)** — new Appendix A.7 entry with `int:` namespace prefix for REST API connectors, tool catalogs, and action registries. 16 action fields (`int:base_url`, `int:http_method`, `int:http_path`, `int:auth_type`, etc.) and 9 trigger-specific fields (`int:poll_interval_secs`, `int:webhook_path`, `int:cron_expression`, etc.). All fields stored in `context` map.
 - **Integration Profile compact keys** — 25 new `int:*` short key mappings registered in Appendix C to avoid collisions.
-- **§27.6 Trigger Definitions via Observation Grains** — documented convention for mapping trigger definitions (polling, webhook, schedule, listener) to Observation grains using `observer_type` values prefixed with `"trigger:"`.
+- **§27.6 Trigger Definitions via Observation Grains** — documented convention for mapping trigger definitions (polling, webhook, schedule, listener) to Observation grains using `observer_type` values prefixed with `"trigger:"`. `"trigger:listener"` uses `observation_mode: "continuous"`, same as webhook.
 - **§27.7 Consensus Grain Usage for Action Definition Validation** — documented usage pattern for recording multi-source agreement on Action definition grains via the Consensus grain type.
 - **Updated §27.1 tool definition example** to include `output_schema` field.
 - **Updated Anthropic API alignment table** in §27.1 to note `output_schema` has no Anthropic equivalent.
+
+### Changed
+
+- **Integration Profile compact key renames (Appendix C)** — fixed collisions and improved consistency:
+  - `"im"` → `"ihm"` (`int:http_method`) — `"im"` collided with `importance`
+  - `"ip"` → `"ihp"` (`int:http_path`) — `"ip"` collided with `invalidation_policy`
+  - `"ict2"` → `"icft"` (`int:cursor_type`) — aligned with field name
+  - `"icfgs"` → `"icfg"` (`int:config_schema`) — shortened for consistency
+  - `"ievs"` → `"ievt"` (`int:event_schema`) — aligned with field name
+- **§27.6 polling trigger example** — added missing `int:path_params` to align with A.7 normative rule requiring path template parameters to match `int:path_params` entries.
+- **§27.6 `observation_mode` mapping** — clarified that `"trigger:listener"` uses `"continuous"` (same as webhook).
+- **§6.1 `category` field** — fixed stale cross-reference from "§27 Category Registry" to "§27 Grain Type Field Specifications" (renamed in v1.2).
 
 ---
 
