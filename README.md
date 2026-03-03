@@ -64,6 +64,15 @@ Think of the `.mg` container as what JSON is to APIs or `.git` objects are to ve
 9. **Share without exposure** — Selective disclosure for privacy-preserving interchange
 10. **One file, full memory** — A `.mg` container is a portable, complete knowledge export
 
+## Companion Specifications
+
+OMS defines the wire format. Two companion specs build on it:
+
+| Spec | Repo | Description |
+|------|------|-------------|
+| **CAL** — Context Assembly Language | [openmemoryspec/cal](https://github.com/openmemoryspec/cal) | Non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. Extends the OMS Store Protocol with `RECALL`, `ASSEMBLE`, `ADD`, and `SUPERSEDE` statements. |
+| **SML** — Semantic Markup Language | (defined within CAL) | Flat, tag-based markup format for LLM context output. Tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …). Produced by CAL `ASSEMBLE` statements. |
+
 ## Specification
 
 The full specification is in [`SPECIFICATION.md`](./SPECIFICATION.md).
@@ -117,7 +126,7 @@ The full specification is in [`SPECIFICATION.md`](./SPECIFICATION.md).
 
 **Out of scope:**
 - Storage layer implementation (filesystem, S3, database, IPFS)
-- Index layer queries and optimization
+- Index layer queries and context assembly — see [CAL](https://github.com/openmemoryspec/cal)
 - Transport protocols (HTTP, MQTT, Kafka)
 - Encryption at rest
 - Agent-to-agent communication protocol

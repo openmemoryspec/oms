@@ -68,6 +68,8 @@ A memory grain is the atomic unit of agent knowledge—a single immutable fact, 
 
 The .mg container format is to autonomous systems what JSON is to APIs and .git objects are to version control: a universal, language-agnostic, self-describing interchange format. It is the foundational wire format of OMS.
 
+The companion **CAL (Context Assembly Language)** specification ([github.com/openmemoryspec/cal](https://github.com/openmemoryspec/cal)) defines the query and context-assembly layer that operates on OMS stores, including the **SML (Semantic Markup Language)** output format for LLM context consumption. See §1.5 for details.
+
 ---
 
 ## 1. Introduction
@@ -128,11 +130,29 @@ OMS addresses this gap by defining a universal standard for knowledge interchang
 
 **Out of scope:**
 - Storage layer implementation (filesystem, S3, database, IPFS)
-- Index layer queries and optimization
+- Index layer queries and optimization — see CAL (§1.5)
 - Policy engines and compliance rule evaluation
 - Transport protocols (HTTP, MQTT, Kafka)
 - Encryption at rest (applications of per-grain encryption are external to this spec)
 - Agent-to-agent communication protocol (which uses .mg format)
+
+### 1.5 Companion Specifications
+
+OMS defines the wire format and grain semantics. Two companion specifications build on top of it:
+
+**CAL — Context Assembly Language** ([github.com/openmemoryspec/cal](https://github.com/openmemoryspec/cal))
+
+CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. It answers the question: *"what should be in the agent's context window right now?"* Key properties:
+
+- Operates on all 10 OMS grain types (Belief, Event, State, Workflow, Action, Observation, Goal, Reasoning, Consensus, Consent)
+- Extends the OMS Store Protocol (§28.4) with a formal, structured query syntax
+- `ASSEMBLE` statements compose context from multiple grain sources within a token budget
+- Append-only: CAL writes create new grains via `put`; the language cannot delete or modify existing grains — this is enforced at the grammar level
+- Dual wire format: human-readable `text/cal` and machine-readable `application/json+cal` are bijectively equivalent
+
+**SML — Semantic Markup Language** (defined within the CAL specification)
+
+SML is a flat, tag-based markup format defined by CAL for LLM context consumption. It is not XML. Tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …); attributes carry lightweight decision metadata; text content is natural language. SML is the default output format for CAL `ASSEMBLE` statements and is designed to be consumed directly by an LLM without an XML processor.
 
 ---
 
@@ -2776,6 +2796,26 @@ When Agent A transfers control of a conversation to Agent B, the handoff is reco
 2. The `context_grains` field contains content addresses of grains Agent B needs to continue — typically the recent Event grain chain and any relevant Belief/State grains.
 3. Agent B ingests the referenced grains, validates the delegation scope, and continues with a new `run_id` but the same `session_id`.
 4. When Agent B completes its task, it writes a Goal grain with `goal_state: "satisfied"` linked via `derived_from` to the delegation grain, and control returns to the agent specified in `return_to`.
+
+### 28.8 CAL and SML — Companion Query and Markup Languages
+
+The query conventions in this section (§28.1–§28.7) define OMS store operations and response envelopes at the structural level. The **Context Assembly Language (CAL)** ([github.com/openmemoryspec/cal](https://github.com/openmemoryspec/cal)) is the companion specification that provides a formal, deterministic syntax for invoking these operations from an agent or LLM.
+
+**Relationship to §28.4 Store Protocol:**
+
+CAL extends the store operations defined in §28.4 with a structured query language. Where §28.4 defines `query`, `search`, `get`, `put`, and `supersede` as abstract operations, CAL provides the syntax for expressing them safely — with built-in token-budget awareness, multi-source composition, and a type system tied to OMS grain types.
+
+| §28.4 store operation | CAL statement |
+|---|---|
+| `query` + `search` | `RECALL <type> WHERE … LIMIT …` |
+| `put` (new grain) | `ADD <type> { … }` |
+| `supersede` | `SUPERSEDE <address> WITH { … }` |
+| `get_batch` + compose | `ASSEMBLE … FROM … BUDGET <n> TOKENS` |
+| introspection | `DESCRIBE <type>` |
+
+**SML output format:**
+
+CAL `ASSEMBLE` statements produce **SML (Semantic Markup Language)** output by default. SML is a flat, tag-based markup format optimized for LLM consumption: tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …), attributes carry lightweight metadata, and text content is natural language. SML is defined within the CAL specification and is not a standalone format. Implementations that expose a query layer SHOULD support CAL and produce SML output for agent context assembly.
 
 ---
 
