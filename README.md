@@ -2,6 +2,8 @@
 
 **Version:** 1.3 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
 
+Backed by [areev.ai](https://areev.ai).
+
 OMS is an open standard for portable, auditable, and interoperable agent memory. It defines three layered specifications — the binary **memory format** (OMS), the **query and assembly language** (CAL), and the **LLM context markup** (SML) — covering the complete lifecycle from storing a memory grain to delivering it to an AI agent's context window.
 
 | Layer | Spec | Role |
