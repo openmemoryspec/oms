@@ -253,7 +253,8 @@ SML metadata density is controlled by disclosure level — the element shape nev
 | Document | Contents |
 |----------|----------|
 | [`SPECIFICATION.md`](./SPECIFICATION.md) | Full OMS wire format, grain types, signing, selective disclosure, conformance, domain profiles |
-| [`CAL.md`](./CAL.md) | CAL grammar (EBNF), all statements, FORMAT system, SML, streaming, policy integration, error codes |
+| [`CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md`](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md) | CAL grammar (EBNF), all statements, FORMAT system, streaming, policy integration, error codes |
+| [`SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md`](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md) | SML format definition, structural rules, comprehensive example, progressive disclosure |
 
 **SPECIFICATION.md table of contents:**
 - Blob Layout and Structure

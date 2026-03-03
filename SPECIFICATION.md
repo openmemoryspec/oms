@@ -68,7 +68,7 @@ A memory grain is the atomic unit of agent knowledge—a single immutable fact, 
 
 The .mg container format is to autonomous systems what JSON is to APIs and .git objects are to version control: a universal, language-agnostic, self-describing interchange format. It is the foundational wire format of OMS.
 
-**CAL (Context Assembly Language)** ([CAL.md](./CAL.md)) and **SML (Semantic Markup Language)** are part of OMS v1.3. CAL defines the query and context-assembly layer that operates on OMS stores; SML is CAL's default output format for LLM context consumption. See §1.5 for details.
+**CAL (Context Assembly Language)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) and **SML (Semantic Markup Language)** ([SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md)) are part of OMS v1.3. CAL defines the query and context-assembly layer that operates on OMS stores; SML is CAL's default output format for LLM context consumption. See §1.5 for details.
 
 ---
 
@@ -140,7 +140,7 @@ OMS addresses this gap by defining a universal standard for knowledge interchang
 
 OMS defines the wire format and grain semantics. Two companion specifications are part of the OMS v1.3 release and are included in this repository:
 
-**CAL — Context Assembly Language** ([CAL.md](./CAL.md))
+**CAL — Context Assembly Language** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md))
 
 CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. It answers the question: *"what should be in the agent's context window right now?"* Key properties:
 
@@ -150,9 +150,9 @@ CAL is a non-destructive, deterministic, LLM-native language for assembling agen
 - Append-only: CAL writes create new grains via `put`; the language cannot delete or modify existing grains — this is enforced at the grammar level
 - Dual wire format: human-readable `text/cal` and machine-readable `application/json+cal` are bijectively equivalent
 
-**SML — Semantic Markup Language** (defined within the CAL specification)
+**SML — Semantic Markup Language** ([SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md))
 
-SML is a flat, tag-based markup format defined by CAL for LLM context consumption. It is not XML. Tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …); attributes carry lightweight decision metadata; text content is natural language. SML is the default output format for CAL `ASSEMBLE` statements and is designed to be consumed directly by an LLM without an XML processor.
+SML is a flat, tag-based markup format optimized for LLM context consumption. It is not XML. Tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …); attributes carry lightweight decision metadata; text content is natural language. SML is the default output format for CAL `ASSEMBLE` statements and is designed to be consumed directly by an LLM without an XML processor.
 
 ---
 
@@ -2799,7 +2799,7 @@ When Agent A transfers control of a conversation to Agent B, the handoff is reco
 
 ### 28.8 CAL and SML — Companion Query and Markup Languages
 
-The query conventions in this section (§28.1–§28.7) define OMS store operations and response envelopes at the structural level. The **Context Assembly Language (CAL)** ([CAL.md](./CAL.md)) is the companion specification that provides a formal, deterministic syntax for invoking these operations from an agent or LLM.
+The query conventions in this section (§28.1–§28.7) define OMS store operations and response envelopes at the structural level. The **Context Assembly Language (CAL)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) is the companion specification that provides a formal, deterministic syntax for invoking these operations from an agent or LLM.
 
 **Relationship to §28.4 Store Protocol:**
 
@@ -2816,7 +2816,7 @@ CAL extends the store operations defined in §28.4 with a structured query langu
 
 **SML output format:**
 
-CAL `ASSEMBLE` statements produce **SML (Semantic Markup Language)** output by default. SML is a flat, tag-based markup format optimized for LLM consumption: tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …), attributes carry lightweight metadata, and text content is natural language. SML is defined within the CAL specification and is not a standalone format. Implementations that expose a query layer SHOULD support CAL and produce SML output for agent context assembly.
+CAL `ASSEMBLE` statements produce **SML (Semantic Markup Language)** output by default. SML is a flat, tag-based markup format optimized for LLM consumption: tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …), attributes carry lightweight metadata, and text content is natural language. See the [SML specification](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md) for the full format definition, structural rules, and progressive disclosure model. Implementations that expose a query layer SHOULD support CAL and produce SML output for agent context assembly.
 
 ---
 
