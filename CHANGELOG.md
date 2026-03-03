@@ -32,6 +32,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 - **§27.6 polling trigger example** — added missing `int:path_params` to align with A.7 normative rule requiring path template parameters to match `int:path_params` entries.
 - **§27.6 `observation_mode` mapping** — clarified that `"trigger:listener"` uses `"continuous"` (same as webhook).
 - **§6.1 `category` field** — fixed stale cross-reference from "§27 Category Registry" to "§27 Grain Type Field Specifications" (renamed in v1.2).
+- **CAL and SML bundled into this repository** — `CAL.md` (Context Assembly Language v1.0) is now part of the OMS v1.3 release. SML (Semantic Markup Language) is defined within §10.4 of `CAL.md`. References updated from `github.com/openmemoryspec/cal` to relative links. OMS spec gains §1.5 (Companion Specifications) and §28.8 (CAL/SML store operation mapping).
 
 ---
 

@@ -1,0 +1,2825 @@
+# CAL (Context Assembly Language) Specification v1.0
+
+**Status:** Draft | **Date:** 2026-03-03 | **Version:** 1.0.0 | **Classification:** Experimental
+**Part of:** [Open Memory Specification (OMS) v1.3](./SPECIFICATION.md)
+---
+
+## Table of Contents
+
+- [Abstract](#abstract)
+1. [Introduction](#1-introduction)
+2. [The Safety Model](#2-the-safety-model)
+3. [Lexical Structure](#3-lexical-structure)
+4. [Grammar (EBNF)](#4-grammar-ebnf)
+5. [Type System](#5-type-system)
+6. [OMS Grain Type Integration](#6-oms-grain-type-integration)
+7. [mg: Relation Vocabulary](#7-mg-relation-vocabulary)
+8. [Statement Semantics](#8-statement-semantics)
+9. [Semantic Shortcuts](#9-semantic-shortcuts)
+10. [FORMAT System](#10-format-system)
+11. [Streaming Protocol](#11-streaming-protocol)
+12. [Domain Profile Querying](#12-domain-profile-querying)
+13. [Store Protocol Mapping](#13-store-protocol-mapping)
+14. [Response Model](#14-response-model)
+15. [Dual Wire Format](#15-dual-wire-format)
+16. [Internationalization](#16-internationalization)
+17. [Execution Model](#17-execution-model)
+18. [Capability Token Model](#18-capability-token-model)
+19. [Policy Integration](#19-policy-integration)
+20. [Threat Model](#20-threat-model)
+21. [Audit Trail](#21-audit-trail)
+22. [Error Model](#22-error-model)
+23. [Compliance Checks](#23-compliance-checks)
+24. [Conformance Levels](#24-conformance-levels)
+25. [Versioning and Evolution](#25-versioning-and-evolution)
+26. [Interface Integration](#26-interface-integration)
+27. [LLM System Prompt Template](#27-llm-system-prompt-template)
+- [Appendix A: Complete EBNF Grammar](#appendix-a-complete-ebnf-grammar)
+- [Appendix B: JSON Schema References](#appendix-b-json-schema-references)
+- [Appendix C: Error Code Registry](#appendix-c-error-code-registry)
+- [Appendix D: Reserved Words](#appendix-d-reserved-words)
+- [Appendix E: Queryable Fields Reference](#appendix-e-queryable-fields-reference)
+- [Appendix F: Version History](#appendix-f-version-history)
+
+---
+
+## Abstract
+
+The **Context Assembly Language (CAL)** is a companion specification to the Open Memory Specification (OMS). It defines a non-destructive, deterministic, LLM-native language for **assembling agent context from persistent memory**.
+
+CAL allows AI agents to **recall** memory, **assemble** context windows from multiple memory sources with budget constraints, and **evolve** memory -- but never **destroy** it. Every write is append-only and fully revertible. The core safety guarantee -- that CAL cannot destroy data -- is enforced at the grammar level and is a structural impossibility, not a policy check.
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in RFC 2119.
+
+---
+
+## 1. Introduction
+
+### 1.1 What is CAL?
+
+CAL is a **non-destructive, deterministic, LLM-native context assembly and evolution language** for memory databases that implement the Open Memory Specification.
+
+CAL is a **non-destructive, deterministic, LLM-native context assembly and evolution language** -- answering "what should be in the agent's context window right now?"
+
+Key capabilities:
+
+| Dimension | CAL (Context Assembly Language) |
+|-----------|---------------------------------|
+| **Primary question** | "What should be in the context window?" |
+| **Core operation** | ASSEMBLE (compose context from multiple sources) |
+| **Output model** | Flat, semantic, LLM-native context (content projection from OMS grains) |
+| **Token awareness** | Native (BUDGET clause, progressive disclosure) |
+| **Multi-source** | First-class (FROM clause with priority) |
+| **Format control** | Built-in (FORMAT clause, AS clause, custom templates) |
+| **Progressive disclosure** | Native (WITH progressive_disclosure) |
+| **Batching** | BATCH statement for multiple queries |
+| **Schema discovery** | DESCRIBE statement for introspection |
+| **Streaming** | Native (STREAM clause on ASSEMBLE) |
+
+### 1.2 Design Goals
+
+1. **Non-destructive by grammar, not by convention.** The parser rejects destructive tokens. There is no "unsafe mode."
+2. **Append-only evolution.** Writes create new grains -- they never modify or delete existing ones. Every change is traceable and revertible.
+3. **Context-window-aware.** CAL understands that its output will be consumed by an LLM with finite context. Budget allocation, progressive disclosure, content projection, and format control are first-class concerns. Output is shaped for LLM comprehension, not storage fidelity.
+4. **Multi-source composition.** ASSEMBLE makes composing context from multiple memory sources a single, declarative operation.
+5. **Bounded execution.** Every query has a compile-time-determinable upper bound on work.
+6. **Policy-transparent.** CAL queries execute within the active policy (GDPR, HIPAA, etc.). CAL cannot override policy.
+7. **LLM-ergonomic.** Keywords read like English. Common patterns have shortcuts (ABOUT, RECENT, SINCE, MY). Errors include suggestions. The grammar fits in approximately 1200 tokens.
+8. **Deterministic.** Same query + same state = same results + same order. No randomness.
+9. **Composable.** Queries nest, pipe, combine with set operations, and compose into ASSEMBLE blocks.
+10. **Internationally aware.** CAL handles multilingual content natively -- Unicode normalization, cross-lingual search, bidi text, and locale-aware sorting are specified behaviors.
+11. **Dual-format.** Every CAL statement has a bijective mapping between human-readable text (`text/cal`) and machine-readable JSON (`application/json+cal`). Neither is canonical -- they are equivalent.
+12. **Versionable.** `CAL/1 RECALL ...` explicitly targets a spec version.
+
+### 1.3 What CAL Is NOT
+
+- **Not SQL.** No tables, no joins, no DDL, no transactions.
+- **Not Turing-complete.** No loops, no recursion, no persistent variables.
+- **Not a destructive language.** CAL cannot forget, erase, delete, or destroy grains. CAL cannot touch encryption keys, policies, or consent records. This is the core safety guarantee.
+- **Not a transport protocol.** CAL defines a language. Transport (HTTP, gRPC, MCP, etc.) is implementation-specific.
+- **Not a rendering engine.** CAL's FORMAT clause specifies *semantic structure*, not pixel-level presentation. The agent or UI decides how to render.
+- **Not a storage mirror.** CAL output is a *projection* optimized for LLM consumption, not a serialization of the underlying OMS grain structure. Hashes, namespaces, and internal metadata stay in the machine envelope.
+
+### 1.4 The Git Analogy
+
+CAL's safety model maps directly to git:
+
+| Git Operation | CAL Equivalent | Destructive? | In CAL? |
+|---------------|---------------|-------------|---------|
+| `git log` | `RECALL` | No | Yes (Tier 0) |
+| `git show` | `RECALL WHERE hash = ...` | No | Yes (Tier 0) |
+| `git add` + `git commit` (new file) | `ADD` | No (append-only) | Yes (Tier 1) |
+| `git commit` (amend existing) | `SUPERSEDE` | No (append-only) | Yes (Tier 1) |
+| `git revert` | `REVERT` | No (creates new commit) | Yes (Tier 1) |
+| `git reset --hard` | Store-level `delete` | **Yes** (destroys data) | **No** |
+| `git push --force` | Crypto-erasure | **Yes** (destroys keys) | **No** |
+
+The line between Tier 0/1 (in CAL) and Tier 2 (not in CAL) is: **can the operation be undone by another append-only operation?** If yes, it is safe for CAL. If no, it stays out.
+
+### 1.5 Relationship to OMS
+
+CAL operates on the 10 grain types defined by OMS v1.3: Belief, Event, State, Workflow, Action, Observation, Goal, Reasoning, Consensus, Consent. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
+
+CAL extends the Store Protocol Convention defined in OMS §28.4 ([SPECIFICATION.md](./SPECIFICATION.md)) with a formal query language. Where OMS defines the `query`, `search`, and `supersede` store operations, CAL provides a structured, deterministic syntax for invoking them safely.
+
+---
+
+## 2. The Safety Model
+
+### 2.1 The Core Guarantee
+
+> **CAL cannot destroy data. This is not a policy check. It is a structural impossibility.**
+>
+> CAL *can* evolve data -- by creating new grains that supersede old ones. But the old grains survive. Every evolution is traceable and revertible. Nothing is ever deleted.
+
+The guarantee is enforced at three reinforcing levels:
+
+| Level | Mechanism | What It Prevents |
+|-------|-----------|-----------------|
+| **Grammar** | The EBNF grammar has no production rules for destructive operations | Parser cannot produce destructive AST nodes |
+| **Type System** | `CalStatement` is a closed enum with exactly 12 variants: `Recall`, `Assemble`, `SetOp`, `Exists`, `History`, `Explain`, `Describe`, `Batch`, `Add`, `Supersede`, `Revert`, `Coalesce`. | No code path from AST to any destructive method |
+| **API Surface** | CAL executor receives a constrained facade, not the full store | Destructive methods (delete, key destruction) are structurally inaccessible |
+
+### 2.2 Three-Tier Capability Model
+
+| Tier | Name | What It Can Do | How It Is Enforced |
+|------|------|---------------|-------------------|
+| **Tier 0** | Read (default) | Query, count, explain, assemble, describe, batch. Cannot modify anything. | Grammar + type system. Default for all CAL sessions. |
+| **Tier 1** | Evolve (opt-in) | Add new grains, supersede existing grains, revert supersessions, view history. Append-only; never deletes. | Separate grammar extension, explicit server opt-in, separate capability token with write quotas. |
+| **Tier 2** | Lifecycle | Erasure, key rotation, policy changes, consent management. | **Does not exist in CAL.** No grammar, no AST, no parser extension, no config flag. Only available through implementation-specific APIs (REST, gRPC, CLI, etc.). |
+
+### 2.3 Formal Safety Proofs
+
+**"CAL cannot delete data because..."** The `CalStatement` enum has 12 variants. The executor's `match` is exhaustive (compiler-verified in statically typed languages). None invoke a delete or forget operation. Adding a delete variant requires modifying the specification.
+
+**"CAL cannot trigger erasure because..."** Erasure requires access to key management or store-level delete operations. The CAL executor facade exposes only: `recall()`, `count()`, `exists()`, `add()`, `supersede()`, `revert()`, `get_history()`, `assemble()`, `describe()`. No key management or delete methods are accessible.
+
+**"CAL ADD cannot destroy data because..."** ADD creates a new grain via the OMS store `put` operation (OMS §28.4). It does not modify or reference any existing grain. The grain count increases by one.
+
+**"CAL SUPERSEDE cannot destroy the original grain because..."** The OMS store protocol defines `supersede` as: write the new grain, then update the old grain's index-layer fields (`superseded_by`, `system_valid_to`). The old grain's blob is never touched. It remains readable.
+
+**"CAL REVERT cannot destroy data because..."** REVERT creates a *new* grain (copying content from a previous version) and then supersedes the current head. Three grains exist afterward: original, supersession, and revert. Nothing is deleted.
+
+**"CAL cannot cross namespace boundaries because..."** Every CAL query carries a `CapabilityToken` cryptographically bound to a namespace. The executor overwrites any namespace in the parsed query with the token's namespace.
+
+**"CAL cannot exhaust resources because..."** Hard limits are specified: `MAX_LIMIT=1000`, `MAX_QUERY_LENGTH=8192 bytes`, `QUERY_TIMEOUT=5000ms`. Tier 1 operations have additional write quotas: `MAX_ADD_PER_MINUTE=20`, `MAX_SUPERSEDE_PER_MINUTE=10`, `MAX_REVERT_PER_MINUTE=5`. These cannot be overridden by query syntax.
+
+### 2.4 Grammar-Level Exclusions
+
+The following tokens do **not exist** in CAL's lexer or grammar:
+
+```
+DELETE, DROP, FORGET, ERASE, DESTROY, PURGE, TRUNCATE,    -- Destructive
+INSERT, CREATE, WRITE, STORE,                               -- Unconstrained creation
+KEY, ENCRYPT, DECRYPT, ROTATE, MASTER, DEK, SECRET,        -- Key management
+POLICY, SEAL, UNSEAL, GRANT, REVOKE, CONSENT, RESTRICT,    -- Policy/auth
+SCHEMA, PARTITION, INDEX, MIGRATION                         -- Schema
+```
+
+If these appear in a query, they are parse errors, not recognized keywords.
+
+Note: `ADD`, `SUPERSEDE`, `REVERT`, `SET`, and `REASON` are Tier 1 keywords. The **parser** always recognizes them (so that `EXPLAIN ADD ...` works as a dry-run even when Tier 1 execution is disabled). However, the **executor** rejects non-EXPLAIN Tier 1 statements when Tier 1 is disabled, returning `CAL-E044: Tier1NotEnabled`. This two-layer approach ensures `EXPLAIN` can always preview evolve operations without risk.
+
+---
+
+## 3. Lexical Structure
+
+### 3.1 Character Set
+
+CAL queries are UTF-8 encoded. Keywords are case-insensitive (`RECALL` = `recall` = `Recall`). Implementations MUST reject queries containing invalid UTF-8 sequences (error `CAL-E070: InvalidUTF8`).
+
+### 3.2 Keywords
+
+All keywords are listed exhaustively.
+
+**Tier 0 (Read) keywords:**
+```
+RECALL, ASSEMBLE, WHERE, AND, OR, NOT, IN, BETWEEN, LIMIT, OFFSET,
+ORDER, BY, ASC, DESC, WITH, EXPLAIN, SCOPE,
+UNION, INTERSECT, EXCEPT,
+SELECT, COUNT, FIRST, GROUP, SUBJECTS, OBJECTS, HASHES, PROJECT,
+INCLUDE, EXCLUDE, IS, NULL, TRUE, FALSE,
+EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE,
+ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, AS,
+FOR, FROM, BUDGET, PRIORITY, FORMAT,
+LET, THREAD,
+STREAM, TEMPLATE, DEFINE, EXTENDS,
+HEADER, ELEMENT, ELEMENT_SUMMARY, ELEMENT_OMIT, SOURCE_BREAK, FOOTER,
+DIFF, PROJECT,
+CAL                                                       -- version prefix
+```
+
+**Tier 1 (Evolve) keywords (always parsed; execution requires Tier 1 enabled -- see section 2.4):**
+```
+ADD, SUPERSEDE, REVERT, SET, REASON
+```
+
+**Relation category keywords:**
+```
+PREFERENCE, KNOWLEDGE, PERMISSION, INTERACTION, AGENCY, LIFECYCLE, OBSERVATION
+```
+
+### 3.3 Identifiers
+
+Field names are a closed set (not user-definable).
+
+**Common fields (available on all grain types):**
+```
+query, subject, relation, object, user_id, namespace,
+confidence, importance, tags, score, type, time, hash,
+verification_status, source_type, contradicted,
+recall_priority, epistemic_status
+```
+
+**Grain-type-specific fields (see section 6 for which types unlock which fields):**
+```
+role, session_id, parent_message_id, model_id, content,
+context, plan,
+trigger, steps,
+tool_name, action_phase, is_error, tool_call_id,
+observer_id, observer_type,
+goal_state, assigned_agent, deadline, depends_on,
+reasoning_type, premises, conclusion,
+threshold, agreement_count, participating_observers,
+consent_action, purpose, grantor_did, grantee_did, scope, expires_at
+```
+
+### 3.4 Literals
+
+| Type | Syntax | Example |
+|------|--------|---------|
+| String | Double-quoted, `\"` escape | `"alice"`, `"last 7 days"` |
+| Number | Optional sign, digits, optional decimal | `0.8`, `-1`, `42` |
+| Boolean | `true` / `false` | `true` |
+| Array | Square brackets, comma-separated | `["tag1", "tag2"]` |
+| Hash | `sha256:` + 8-64 hex chars | `sha256:a1b2c3d4...` |
+| Parameter | `$` + identifier | `$user_id`, `$limit` |
+
+### 3.5 Comments
+
+Line comments only: `-- comment text`
+
+### 3.6 Reserved Words (Future-Proofing)
+
+See [Appendix D](#appendix-d-reserved-words) for the complete list. Reserved words cannot be used as unquoted identifiers even if not yet functional.
+
+---
+
+## 4. Grammar (EBNF)
+
+This section provides the unified CAL/1 grammar. See [Appendix A](#appendix-a-complete-ebnf-grammar) for the complete, unabridged grammar.
+
+```ebnf
+(* CAL/1 Grammar -- Tier 0 + Tier 1 + All Extensions *)
+
+query           = [ version_prefix ] , [ let_block ] , statement ;
+version_prefix  = "CAL" , "/" , major_version ;
+major_version   = digit+ ;
+
+let_block       = { let_binding } ;
+let_binding     = "LET" , "$" , identifier , "=" , recall_stmt , [ "|" , extractor ] , ";" ;
+extractor       = "SUBJECTS" | "OBJECTS" | "HASHES" ;
+
+statement       = explain_stmt | recall_stmt | assemble_stmt | set_stmt
+                | exists_stmt | history_stmt | describe_stmt | batch_stmt
+                | coalesce_stmt | define_template_stmt
+                | add_stmt | supersede_stmt | revert_stmt ;
+
+(* --- Tier 0: Read --- *)
+
+explain_stmt    = "EXPLAIN" , ( recall_stmt | assemble_stmt | set_stmt
+                | add_stmt | supersede_stmt | revert_stmt | batch_stmt
+                | coalesce_stmt ) ;
+
+set_stmt        = "(" , query , ")" , set_op , "(" , query , ")" ;
+set_op          = "UNION" | "INTERSECT" | "EXCEPT" ;
+
+recall_stmt     = "RECALL" , [ "MY" ] , [ grain_type_plural ] , [ in_clause ] ,
+                  [ about_clause ] , [ like_clause ] , [ since_clause ] ,
+                  [ between_clause ] , [ thread_clause ] ,
+                  [ where_clause ] , [ with_clause ] , [ pipeline ] ,
+                  [ recent_clause ] , [ contradictions_clause ] , [ as_clause ] ;
+
+assemble_stmt   = "ASSEMBLE" , [ context_name ] ,
+                  [ for_clause ] ,
+                  from_clause ,
+                  [ budget_clause ] ,
+                  [ priority_clause ] ,
+                  [ format_clause ] ,
+                  [ stream_clause ] ,
+                  [ with_clause ] ;
+
+exists_stmt     = "EXISTS" , ( hash_literal | parameter ) ;
+
+history_stmt    = "HISTORY" , ( hash_literal | parameter ) , [ diff_clause ]
+                | "HISTORY" , [ in_clause ] , "WHERE" , subject_clause , "AND" , relation_clause ,
+                  [ as_of_clause ] ;
+
+describe_stmt   = "DESCRIBE" , describe_target ;
+describe_target = "grain_types" | "fields" , [ grain_type_singular ]
+                | "capabilities" | "server" | "templates" | "grammar" ;
+
+batch_stmt      = "BATCH" , "{" , batch_entry , { "," , batch_entry } , "}" ;
+batch_entry     = label , ":" , ( recall_stmt | exists_stmt | history_stmt
+                | describe_stmt | coalesce_stmt ) ;
+
+coalesce_stmt   = "COALESCE" , "(" , recall_stmt , "," , recall_stmt ,
+                  { "," , recall_stmt } , ")" ;
+
+define_template_stmt = "DEFINE" , "TEMPLATE" , template_name ,
+                       [ extends_clause ] , template_body ;
+
+(* --- Clauses --- *)
+
+context_name    = identifier ;
+label           = identifier ;
+
+for_clause      = "FOR" , string_literal ;
+from_clause     = "FROM" , source , { "," , source } ;
+source          = [ label , ":" ] , "(" , recall_stmt , ")"
+                | [ label , ":" ] , let_ref ;
+let_ref         = "$" , identifier ;
+
+budget_clause   = "BUDGET" , positive_integer , ( "tokens" | "grains" ) ;
+priority_clause = "PRIORITY" , label , { ">" , label } ;
+format_clause   = "FORMAT" , format_spec ;
+format_spec     = format_type
+                | preset_name
+                | "TEMPLATE" , template_name
+                | "TEMPLATE" , "{" , template_body , "}" ;
+format_type     = "markdown" | "json" | "yaml" | "text" | "sml" | "triples" | "toon" ;
+preset_name     = "structured" | "readable" | "compact" | "data" ;
+
+stream_clause   = "STREAM" , [ "{" , stream_option , { "," , stream_option } , "}" ] ;
+stream_option   = "progress" | "budget" | "chunks" | "all"
+                | "chunk_size" , "=" , positive_integer ;
+
+about_clause    = "ABOUT" , string_literal ;
+recent_clause   = "RECENT" , positive_integer ;
+since_clause    = "SINCE" , string_literal ;
+like_clause     = "LIKE" , string_literal ;
+between_clause  = "BETWEEN" , value , "AND" , value ;
+contradictions_clause = "CONTRADICTIONS" ;
+as_clause       = "AS" , format_type ;
+
+thread_clause   = "THREAD" , thread_target ;
+thread_target   = string_literal | "FROM" , hash_literal ;
+
+diff_clause     = "DIFF" , ( hash_literal | parameter ) ;
+as_of_clause    = "AS" , "OF" , string_literal ;
+
+in_clause       = "IN" , ( string_literal | "SCOPE" , string_literal ) ;
+
+where_clause    = "WHERE" , condition , { "AND" , condition } ;
+
+condition       = field_condition | grain_field_condition | query_condition
+                | time_condition | type_condition | tag_condition
+                | in_condition | hash_condition | meta_condition
+                | relation_shortcut | domain_field_condition ;
+
+field_condition   = field_name , comparator , value ;
+grain_field_condition = grain_field_name , comparator , value ;
+meta_condition    = meta_field_name , comparator , value ;
+query_condition   = "query" , "=" , string_literal ;
+time_condition    = "time" , "=" , string_literal
+                  | "time" , "BETWEEN" , value , "AND" , value ;
+type_condition    = "type" , "=" , string_literal ;
+tag_condition     = "tags" , ( "INCLUDE" | "EXCLUDE" ) , array_literal ;
+in_condition      = field_name , "IN" , "(" , ( value_list | subquery_extract ) , ")" ;
+hash_condition    = "hash" , "=" , ( hash_literal | parameter ) ;
+relation_shortcut = "relation" , "IS" , relation_category ;
+domain_field_condition = domain_field , comparator , value ;
+
+domain_field    = domain_prefix , ":" , identifier ;
+domain_prefix   = "hc" | "legal" | "fin" | "rob" | "sci" | "con" | "int" ;
+
+relation_category = "PREFERENCE" | "KNOWLEDGE" | "PERMISSION" | "INTERACTION"
+                  | "AGENCY" | "LIFECYCLE" | "OBSERVATION" ;
+
+subquery_extract = recall_stmt , "|" , extractor ;
+
+meta_field_name = "recall_priority" | "epistemic_status" | "verification_status"
+                | "source_type" ;
+
+grain_field_name = event_field | state_field | workflow_field
+                 | action_field | observation_field | goal_field
+                 | reasoning_field | consensus_field | consent_field ;
+
+event_field     = "role" | "session_id" | "parent_message_id" | "model_id" | "content" ;
+state_field     = "context" | "plan" ;
+workflow_field  = "trigger" | "steps" ;
+action_field    = "tool_name" | "action_phase" | "is_error" | "tool_call_id" ;
+observation_field = "observer_id" | "observer_type" ;
+goal_field      = "goal_state" | "assigned_agent" | "deadline" | "depends_on" ;
+reasoning_field = "reasoning_type" | "premises" | "conclusion" ;
+consensus_field = "threshold" | "agreement_count" | "participating_observers" ;
+consent_field   = "consent_action" | "purpose" | "grantor_did" | "grantee_did"
+                | "scope" | "expires_at" ;
+
+comparator      = "=" | "!=" | ">=" | "<=" | ">" | "<" ;
+
+field_name      = "subject" | "relation" | "object" | "user_id" | "namespace"
+                | "confidence" | "importance" | "score"
+                | "verification_status" | "source_type" | "contradicted" ;
+
+subject_clause  = "subject" , "=" , value ;
+relation_clause = "relation" , "=" , value ;
+
+with_clause     = "WITH" , with_option , { "," , with_option } ;
+with_option     = "superseded" | "score_breakdown" | "explanation" | "provenance"
+                | "contradiction_detection" | "progressive_disclosure"
+                | "summarize"
+                | "diversity" , "(" , diversity_spec , ")"
+                | "consistency" , "(" , consistency_level , ")"
+                | "progressive_disclosure" , "(" , disclosure_level , ")"
+                | "dedup" , "(" , field_name , ")"
+                | "locale" , "(" , string_literal , ")"
+                | "cache" , "(" , "ttl" , "=" , positive_integer , ")"
+                | extension_option ;
+diversity_spec  = "mmr" , [ "," , "lambda" , "=" , number ]
+                | "threshold" , "," , number ;
+consistency_level = "eventual" | "bounded" , "(" , number , ")" | "linearizable" ;
+disclosure_level = "summary" | "headlines" | "full" ;
+extension_option = "x_" , identifier , [ "(" , value_list , ")" ] ;
+
+pipeline        = { "|" , pipe_stage } ;
+pipe_stage      = select_stage | order_stage | limit_stage | offset_stage
+                | count_stage | first_stage | subjects_stage | objects_stage
+                | hashes_stage | group_stage | project_stage ;
+select_stage    = "SELECT" , field_name , { "," , field_name } ;
+order_stage     = "ORDER" , "BY" , field_name , [ "ASC" | "DESC" ] ;
+limit_stage     = "LIMIT" , positive_integer ;
+offset_stage    = "OFFSET" , ( positive_integer | parameter ) ;
+count_stage     = "COUNT" ;
+first_stage     = "FIRST" ;
+subjects_stage  = "SUBJECTS" ;
+objects_stage   = "OBJECTS" ;
+hashes_stage    = "HASHES" ;
+group_stage     = "GROUP" , "BY" , field_name ;
+project_stage   = "PROJECT" , project_spec , { "," , project_spec } ;
+project_spec    = "content" , "(" , project_field , { "," , project_field } , ")"
+                | "attr" , "(" , project_field , { "," , project_field } , ")" ;
+project_field   = field_name | grain_field_name | domain_field ;
+
+(* --- Tier 1: Evolve --- *)
+
+add_stmt        = "ADD" , grain_type_singular , add_clause , { add_clause } , reason_clause ;
+supersede_stmt  = "SUPERSEDE" , ( hash_literal | parameter ) , set_clause , { set_clause } , reason_clause ;
+revert_stmt     = "REVERT" , ( hash_literal | parameter ) , reason_clause ;
+
+add_clause      = "SET" , ( add_field | grain_add_field ) , "=" , value ;
+add_field       = "subject" | "relation" | "object"
+                | "confidence" | "importance" | "tags" ;
+grain_add_field = goal_add_field | observation_add_field ;
+goal_add_field  = "goal_state" | "assigned_agent" | "deadline" | "depends_on" ;
+observation_add_field = "observer_id" | "observer_type" ;
+
+set_clause      = "SET" , evolve_field , "=" , value ;
+evolve_field    = "object" | "confidence" | "importance" | "tags" ;
+reason_clause   = "REASON" , string_literal ;
+
+(* --- Template definitions --- *)
+
+template_name   = identifier ;
+extends_clause  = "EXTENDS" , ( preset_name | template_name ) ;
+template_body   = section+ ;
+section         = header_section | element_section | element_summary_section
+                | element_omit_section | source_break_section | footer_section ;
+header_section           = "HEADER" , "{" , template_text , "}" ;
+element_section          = "ELEMENT" , "{" , template_text , "}" ;
+element_summary_section  = "ELEMENT_SUMMARY" , "{" , template_text , "}" ;
+element_omit_section     = "ELEMENT_OMIT" , "{" , template_text , "}" ;
+source_break_section     = "SOURCE_BREAK" , "{" , template_text , "}" ;
+footer_section           = "FOOTER" , "{" , template_text , "}" ;
+
+(* --- Shared terminals --- *)
+
+value           = string_literal | number | boolean | parameter
+                | array_literal | hash_literal ;
+value_list      = value , { "," , value } ;
+string_literal  = '"' , { any_char - '"' | '\\"' } , '"' ;
+number          = [ "-" ] , digit+ , [ "." , digit+ ] ;
+boolean         = "true" | "false" ;
+parameter       = "$" , identifier ;
+array_literal   = "[" , [ value_list ] , "]" ;
+hash_literal    = "sha256:" , hex_char{8,64} ;
+identifier      = letter , { letter | digit | "_" } ;
+positive_integer = digit+ ;
+
+grain_type_plural   = "beliefs" | "events" | "states" | "workflows" | "actions"
+                    | "observations" | "goals" | "reasonings" | "consensuses" | "consents" ;
+
+grain_type_singular = "belief" | "event" | "state" | "workflow" | "action"
+                    | "observation" | "goal" | "reasoning" | "consensus" | "consent" ;
+```
+
+---
+
+## 5. Type System
+
+### 5.1 Grain Types (Closed Set)
+
+| Type | Plural (after RECALL) | Singular (in ADD/WHERE) | OMS Type Code |
+|------|----------------------|------------------------|---------------|
+| Belief | `beliefs` | `belief` | 0x01 |
+| Event | `events` | `event` | 0x02 |
+| State | `states` | `state` | 0x03 |
+| Workflow | `workflows` | `workflow` | 0x04 |
+| Action | `actions` | `action` | 0x05 |
+| Observation | `observations` | `observation` | 0x06 |
+| Goal | `goals` | `goal` | 0x07 |
+| Reasoning | `reasonings` | `reasoning` | 0x08 |
+| Consensus | `consensuses` | `consensus` | 0x09 |
+| Consent | `consents` | `consent` | 0x0A |
+
+### 5.2 Common Field Types
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `query` | String | `=` only | Triggers semantic (BM25/vector) search |
+| `subject` | String | `=`, `!=`, `IN` | Triple subject lookup |
+| `relation` | String | `=`, `!=`, `IN`, `IS` | Triple relation lookup. `IS` used with relation category shortcuts. |
+| `object` | String | `=`, `!=`, `IN` | Triple object lookup |
+| `user_id` | String | `=`, `!=` | User isolation |
+| `namespace` | String | `=` | Namespace isolation (overwritten by token) |
+| `confidence` | Number | `=`, `!=`, `>=`, `<=`, `>`, `<` | Range [0.0, 1.0] |
+| `importance` | Number | `=`, `!=`, `>=`, `<=`, `>`, `<` | Range [0.0, 1.0] |
+| `score` | Number | `>=`, `>` | Post-retrieval filter |
+| `tags` | Array | `INCLUDE`, `EXCLUDE` | Tag set operations |
+| `type` | GrainType | `=` | One of 10 types |
+| `time` | Temporal | `=`, `BETWEEN` | Natural language or epoch |
+| `hash` | Hash | `=` | Content-address lookup |
+| `contradicted` | Boolean | `=` | `true` or `false` |
+| `verification_status` | String | `=` | `"unverified"`, `"verified"`, `"contested"`, `"retracted"` |
+| `source_type` | String | `=` | Source type |
+| `recall_priority` | String | `=` | `"hot"`, `"warm"`, `"cold"` |
+| `epistemic_status` | String | `=` | `"certain"`, `"probable"`, `"uncertain"`, `"estimated"`, `"derived"` |
+
+### 5.3 Evolve Fields (Tier 1, Closed Set)
+
+**ADD fields** -- these can appear in an `ADD` statement's `SET` clauses. The first three are **required**:
+
+| Field | Type | Required? | Constraint |
+|-------|------|-----------|-----------|
+| `subject` | String | **Yes** | The entity |
+| `relation` | String | **Yes** | The predicate |
+| `object` | String | **Yes** | The value |
+| `confidence` | Number | No | Range [0.0, 1.0]. Default: implementation-defined |
+| `importance` | Number | No | Range [0.0, 1.0]. Default: implementation-defined |
+| `tags` | Array | No | Tag set. Default: empty |
+
+Namespace and user_id are taken from the capability token -- they cannot appear in SET clauses.
+
+**SUPERSEDE fields** -- only these fields can appear in a `SUPERSEDE` statement's `SET` clauses:
+
+| Field | Type | Constraint |
+|-------|------|-----------|
+| `object` | String | The new value of the fact |
+| `confidence` | Number | Range [0.0, 1.0] |
+| `importance` | Number | Range [0.0, 1.0] |
+| `tags` | Array | Replaces the tag set |
+
+### 5.4 NULL Semantics
+
+Missing field = no match (never errors). `WHERE confidence >= 0.8` on a grain without `confidence` returns no match, not an error.
+
+---
+
+## 6. OMS Grain Type Integration
+
+### 6.1 Design Principle
+
+When a `RECALL` statement specifies a grain type (e.g., `RECALL actions`), the parser unlocks a **type-specific field set** for use in `WHERE` clauses. This enables precise querying of OMS-native fields that only exist on specific grain types, without polluting the global field namespace.
+
+The type-specific field set is a **compile-time guarantee**: the parser MUST reject field references that do not belong to the specified grain type. When no grain type is specified (`RECALL WHERE ...`), only the common field set is available.
+
+### 6.2 Field Resolution Rules
+
+1. **Phase 1 -- Common fields.** The common field set (section 5.2) is always available.
+2. **Phase 2 -- Type-specific fields.** When the statement specifies a grain type plural, the grain-type-specific field set is additionally available.
+
+**Validation rule:** If a `grain_field_condition` references a field not in the declared grain type's field set, the parser MUST return error `CAL-E060: FieldNotOnGrainType` with a suggestion listing valid fields for that type.
+
+### 6.3 Grain-Type-Specific Queryable Fields
+
+#### Belief (0x01) -- `RECALL beliefs`
+
+All Belief fields are in the common set (`subject`, `relation`, `object`, `confidence`). No additional type-specific fields.
+
+#### Event (0x02) -- `RECALL events`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `role` | String | `=`, `!=` | `"user"`, `"assistant"`, `"system"`, `"tool"` |
+| `session_id` | String | `=` | Conversation session identifier |
+| `parent_message_id` | String | `=` | Threading: parent message reference |
+| `model_id` | String | `=`, `!=` | LLM model identifier |
+| `content` | String | `=` | Semantic search on event content |
+
+#### State (0x03) -- `RECALL states`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `context` | String | `=`, `!=` | State context identifier |
+| `plan` | String | `=` | Semantic search on plan content |
+
+#### Workflow (0x04) -- `RECALL workflows`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `trigger` | String | `=`, `!=` | Trigger condition (e.g., `"on:user_message"`) |
+| `steps` | String | `=` | Semantic search on workflow steps |
+
+#### Action (0x05) -- `RECALL actions`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `tool_name` | String | `=`, `!=`, `IN` | Tool identifier |
+| `action_phase` | String | `=` | `"definition"`, `"call"`, `"result"`, `"complete"` |
+| `is_error` | Boolean | `=` | Whether the action resulted in error |
+| `tool_call_id` | String | `=` | Correlation ID across action phases |
+
+#### Observation (0x06) -- `RECALL observations`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `observer_id` | String | `=`, `!=` | Identifier of the observing entity |
+| `observer_type` | String | `=`, `!=` | Type classifier (e.g., `"agent:monitor"`) |
+
+#### Goal (0x07) -- `RECALL goals`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `goal_state` | String | `=`, `!=` | `"active"`, `"completed"`, `"abandoned"`, `"blocked"` |
+| `assigned_agent` | String | `=`, `!=` | DID of responsible agent |
+| `deadline` | Temporal | `=`, `BETWEEN` | ISO 8601 or epoch |
+| `depends_on` | String | `=`, `IN` | Content address(es) of prerequisite goals |
+
+#### Reasoning (0x08) -- `RECALL reasonings`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `reasoning_type` | String | `=` | `"deductive"`, `"inductive"`, `"abductive"`, `"analogical"` |
+| `premises` | String | `=` | Semantic search on premises |
+| `conclusion` | String | `=`, `!=` | Semantic or exact match on conclusion |
+
+#### Consensus (0x09) -- `RECALL consensuses`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `threshold` | Number | `=`, `>=`, `<=`, `>`, `<` | Agreement threshold [0.0, 1.0] |
+| `agreement_count` | Number | `=`, `>=`, `<=`, `>`, `<` | Number of agreeing observers |
+| `participating_observers` | Array | `INCLUDE` | Filter by participating observer IDs |
+
+#### Consent (0x0A) -- `RECALL consents`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `consent_action` | String | `=` | `"grant"` or `"withdraw"` |
+| `purpose` | String | `=`, `!=` | Purpose-binding (e.g., `"personalization"`) |
+| `grantor_did` | String | `=` | DID of consent grantor |
+| `grantee_did` | String | `=` | DID of consent recipient |
+| `scope` | String | `=` | Consent scope identifier |
+| `expires_at` | Temporal | `=`, `BETWEEN` | Consent expiration |
+
+### 6.4 Type-Specific ADD Extensions
+
+When adding Goal or Observation grains, type-specific fields are available in SET clauses:
+
+```sql
+ADD goal
+  SET subject = "alice"
+  SET relation = "mg:intends"
+  SET object = "complete quarterly review"
+  SET goal_state = "active"
+  SET assigned_agent = "did:web:assistant.example.com"
+  SET deadline = "2026-03-15T00:00:00Z"
+  SET importance = 0.9
+  REASON "user created objective during planning session"
+
+ADD observation
+  SET subject = "system"
+  SET relation = "mg:perceives"
+  SET object = "alice works late on Fridays"
+  SET observer_id = "obs-activity-monitor"
+  SET observer_type = "agent:activity-tracker"
+  SET confidence = 0.7
+  REASON "observed pattern across last 4 weeks"
+```
+
+### 6.5 Field Count Summary
+
+| Grain Type | Common Fields | Type-Specific Fields | Total Queryable |
+|-----------|--------------|---------------------|----------------|
+| Belief | 18 | 0 | 18 |
+| Event | 18 | 5 | 23 |
+| State | 18 | 2 | 20 |
+| Workflow | 18 | 2 | 20 |
+| Action | 18 | 4 | 22 |
+| Observation | 18 | 2 | 20 |
+| Goal | 18 | 4 | 22 |
+| Reasoning | 18 | 3 | 21 |
+| Consensus | 18 | 3 | 21 |
+| Consent | 18 | 6 | 24 |
+| _(no type)_ | 18 | 0 | 18 |
+
+---
+
+## 7. mg: Relation Vocabulary
+
+### 7.1 Standard mg: Relations
+
+OMS defines a standard `mg:` relation vocabulary. CAL provides first-class support for `mg:` relations: they are valid string literals, the parser recognizes them for validation, and common patterns have semantic shortcuts.
+
+| Relation | Category | Typical Subject | Typical Object | Description |
+|----------|----------|----------------|----------------|-------------|
+| `mg:perceives` | Observation | Agent/Observer | Phenomenon | Sensory/cognitive input |
+| `mg:knows` | Knowledge | Entity | Fact | Knowledge assertion |
+| `mg:said` | Interaction | Entity | Statement | Recorded utterance |
+| `mg:did` | Interaction | Entity | Action description | Recorded action |
+| `mg:infers` | Knowledge | Agent | Conclusion | Inference result |
+| `mg:agrees_with` | Consensus | Agent | Proposition | Agreement record |
+| `mg:state_at` | Observation | Agent | State snapshot | Point-in-time state |
+| `mg:requires_steps` | Workflow | Process | Step sequence | Workflow definition |
+| `mg:intends` | Lifecycle | Entity | Objective | Goal declaration |
+| `mg:permits` | Permission | Grantor DID | Action/scope | Permission grant |
+| `mg:revokes` | Permission | Grantor DID | Action/scope | Permission withdrawal |
+| `mg:prohibits` | Permission | Authority | Action/scope | Prohibition |
+| `mg:requires` | Preference | Entity | Requirement | Requirement assertion |
+| `mg:prefers` | Preference | Entity | Preference | Preference assertion |
+| `mg:avoids` | Preference | Entity | Aversion | Avoidance assertion |
+| `mg:delegates_to` | Agency | Entity | Agent DID | Delegation |
+| `mg:owned_by` | Knowledge | Resource | Entity | Ownership |
+| `mg:has_capability` | Agency | Agent DID | Capability | Agent capability |
+| `mg:handed_off_to` | Interaction | Agent DID | Agent DID | Agent handoff |
+| `mg:depends_on` | Lifecycle | Goal | Goal | Goal dependency |
+| `mg:assigned_to` | Agency | Task | Agent DID | Task assignment |
+
+### 7.2 Relation Category Shortcuts
+
+CAL defines **relation category shortcuts** as syntactic sugar for common multi-relation queries. These expand to `IN` conditions at parse time:
+
+| Shortcut | Expands To |
+|----------|-----------|
+| `relation IS PREFERENCE` | `relation IN ("mg:prefers", "mg:avoids", "mg:requires")` |
+| `relation IS KNOWLEDGE` | `relation IN ("mg:knows", "mg:infers")` |
+| `relation IS PERMISSION` | `relation IN ("mg:permits", "mg:revokes", "mg:prohibits")` |
+| `relation IS INTERACTION` | `relation IN ("mg:said", "mg:did", "mg:handed_off_to")` |
+| `relation IS AGENCY` | `relation IN ("mg:delegates_to", "mg:has_capability", "mg:assigned_to")` |
+| `relation IS LIFECYCLE` | `relation IN ("mg:intends", "mg:depends_on")` |
+| `relation IS OBSERVATION` | `relation IN ("mg:perceives", "mg:state_at")` |
+
+**Examples:**
+
+```sql
+-- All preference-related beliefs about alice
+RECALL beliefs WHERE subject = "alice" AND relation IS PREFERENCE
+  | ORDER BY confidence DESC
+
+-- All permission records for a DID
+RECALL WHERE subject = "did:key:z6Mk..." AND relation IS PERMISSION
+```
+
+### 7.3 mg: Relation Validation
+
+The parser SHOULD validate `mg:` prefixed relation values against the known vocabulary. Unknown `mg:` relations produce warning `CAL-W001` (not an error).
+
+---
+
+## 8. Statement Semantics
+
+CAL/1 has **12 statement types** organized into three tiers:
+
+| Statement | Tier | Description |
+|-----------|------|-------------|
+| **RECALL** | 0 | Retrieve grains matching filters |
+| **ASSEMBLE** | 0 | Compose context from multiple sources with budget |
+| **EXISTS** | 0 | Check grain existence by content address |
+| **HISTORY** | 0 | Version history with AS OF and DIFF |
+| **EXPLAIN** | 0 | Execution plan preview |
+| **DESCRIBE** | 0 | Schema introspection |
+| **BATCH** | 0 | Multiple independent queries in one request |
+| **COALESCE** | 0 | Fallback chain of RECALL queries |
+| **ADD** | 1 | Create a new grain (append-only) |
+| **SUPERSEDE** | 1 | Create a new version of an existing grain |
+| **REVERT** | 1 | Restore a previous version |
+| *Set operations* | 0 | `UNION`, `INTERSECT`, `EXCEPT` |
+
+### 8.1 RECALL (Tier 0)
+
+Retrieves grains matching the given filters. Returns results using the OMS Standard Search Response Envelope.
+
+```sql
+RECALL beliefs WHERE subject = "alice" AND relation = "prefers"
+  WITH contradiction_detection
+  | ORDER BY confidence DESC
+  | LIMIT 10
+```
+
+RECALL supports semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS -- see section 9), grain-type-specific fields (section 6), thread shorthand (section 8.1.1), and per-query format control via AS.
+
+```sql
+-- With grain-type-specific fields
+RECALL actions WHERE tool_name = "get_weather" AND is_error = false
+  | ORDER BY time DESC | LIMIT 20
+
+-- With domain profile fields
+RECALL beliefs WHERE tags INCLUDE ["profile:healthcare"]
+  AND hc:patient_id = "P-12345" AND relation = "mg:knows"
+```
+
+#### 8.1.1 THREAD Shorthand
+
+The `THREAD` keyword provides concise syntax for conversation retrieval:
+
+```sql
+-- Full conversation in a session
+RECALL events THREAD "sess-123"
+-- Expands to: RECALL events WHERE session_id = "sess-123" | ORDER BY time ASC
+
+-- Full thread containing a specific message
+RECALL events THREAD FROM sha256:a1b2c3d4...
+```
+
+### 8.2 ASSEMBLE (Tier 0)
+
+The flagship new statement. Composes a context block from multiple RECALL sources with token budgets, priority ordering, format control, and progressive disclosure.
+
+```sql
+CAL/1 ASSEMBLE user_context
+  FOR "conversation about alice's preferences and goals"
+  FROM
+    beliefs:  (RECALL beliefs ABOUT "alice" WHERE relation = "prefers" LIMIT 20),
+    goals:    (RECALL goals ABOUT "alice" RECENT 10),
+    events:   (RECALL events WHERE user_id = "alice" RECENT 5),
+    history:  (RECALL beliefs ABOUT "alice"
+                WHERE relation = "prefers" WITH superseded
+                | ORDER BY time DESC | LIMIT 3)
+  BUDGET 2000 tokens
+  PRIORITY beliefs > goals > events > history
+  FORMAT markdown
+  WITH progressive_disclosure, dedup(subject)
+```
+
+**Execution Phases:**
+
+1. **Source Resolution.** Each source in the FROM clause is an independent RECALL. They execute in parallel. Results MUST be deterministic.
+2. **Deduplication.** If `WITH dedup(field)` is specified, grains in multiple sources are deduplicated. The copy from the highest-priority source is kept.
+3. **Budget Allocation.** The budget allocator distributes tokens according to the PRIORITY clause. Default weights: 2 sources [0.65, 0.35]; 3 sources [0.50, 0.30, 0.20]; 4 sources [0.40, 0.28, 0.20, 0.12]; 5+ sources: exponential decay. Surplus from under-utilizing sources redistributes to remaining sources.
+4. **Progressive Disclosure.** When enabled, the response includes three tiers: Summary, Headlines, Full.
+5. **Formatting.** The FORMAT clause determines output structure.
+
+**Budget Units:**
+
+| Unit | Meaning | Default | Max |
+|------|---------|---------|-----|
+| `tokens` | Approximate token count | 4000 | 16000 |
+| `grains` | Maximum total grain count | 50 | 200 |
+
+Token estimation is approximate by design. The response MUST report actual tokens used.
+
+**ASSEMBLE Constraints:**
+
+| Constraint | Limit |
+|-----------|-------|
+| Max sources in FROM | 8 |
+| Max LET bindings per ASSEMBLE | 5 |
+| Max total BUDGET (tokens) | 16,000 |
+| Max total BUDGET (grains) | 200 |
+| Max context_name length | 64 characters |
+| Max FOR string length | 256 characters |
+| ASSEMBLE timeout | 10,000ms |
+
+### 8.3 EXISTS (Tier 0)
+
+Checks if a specific grain exists by content address. Returns boolean. O(1) via hash lookup.
+
+```sql
+EXISTS sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+```
+
+### 8.4 HISTORY (Tier 0)
+
+Retrieves the version history for a grain or a (subject, relation) triple. Returns versions in reverse chronological order. Capped at 100 versions.
+
+```sql
+-- By hash: show version chain
+HISTORY sha256:a1b2c3d4...
+
+-- By triple: show all versions
+HISTORY WHERE subject = "alice" AND relation = "prefers"
+
+-- AS OF: temporal snapshot
+HISTORY WHERE subject = "alice" AND relation = "prefers" AS OF "2025-06-15"
+
+-- DIFF: show changes between two versions
+HISTORY sha256:aaa... DIFF sha256:bbb...
+```
+
+### 8.5 EXPLAIN (Tier 0)
+
+Returns the execution plan without running the query. Works with all statement types including ASSEMBLE.
+
+```sql
+EXPLAIN RECALL beliefs WHERE query = "alice preferences" LIMIT 10
+EXPLAIN ASSEMBLE user_context
+  FOR "conversation about alice"
+  FROM beliefs: (RECALL beliefs ABOUT "alice"),
+       goals: (RECALL goals ABOUT "alice" RECENT 5)
+  BUDGET 2000 tokens
+```
+
+### 8.6 DESCRIBE (Tier 0)
+
+Schema introspection for grain types, fields, capabilities, server metadata, templates, and grammar.
+
+```sql
+CAL/1 DESCRIBE grain_types        -- list available grain types
+CAL/1 DESCRIBE fields             -- list all queryable fields
+CAL/1 DESCRIBE fields belief      -- list fields for a specific grain type
+CAL/1 DESCRIBE capabilities       -- server capabilities and conformance
+CAL/1 DESCRIBE server             -- server metadata
+CAL/1 DESCRIBE templates          -- list registered templates
+CAL/1 DESCRIBE grammar            -- return EBNF (optional, Extended conformance)
+```
+
+### 8.7 BATCH (Tier 0)
+
+Multiple independent queries in a single request. Each sub-query gets its own result slot. Only Tier 0 (read) statements are allowed in BATCH.
+
+```sql
+CAL/1 BATCH {
+  preferences: RECALL beliefs ABOUT "alice" WHERE relation = "prefers",
+  recent:      RECALL events ABOUT "alice" RECENT 5,
+  team:        RECALL beliefs WHERE relation = "member_of" AND object = "team-alpha"
+}
+```
+
+**Constraints:** Max 10 queries per BATCH. LET bindings within a BATCH are scoped to that BATCH block.
+
+### 8.8 ADD (Tier 1)
+
+Creates a **new** grain. Pure append-only -- does not modify or reference any existing grain.
+
+```sql
+ADD belief
+  SET subject = "alice"
+  SET relation = "prefers"
+  SET object = "dark mode"
+  SET confidence = 0.9
+  SET tags = ["preference", "ui"]
+  REASON "user stated preference during onboarding conversation"
+```
+
+**Addable grain types:** Belief, Observation, Goal. Events, Actions, States, and other types represent system-generated records and are not user-creatable.
+
+**Required SET fields:** `subject`, `relation`, `object`. `REASON` is mandatory.
+
+### 8.9 SUPERSEDE (Tier 1)
+
+Creates a **new** grain that supersedes an existing one. The old grain is preserved and remains queryable via `WITH superseded`.
+
+```sql
+SUPERSEDE sha256:target_hash
+  SET object = "light mode"
+  SET confidence = 0.95
+  REASON "user explicitly changed preference"
+```
+
+Only Belief grains can be superseded via CAL. At least one `SET` clause and `REASON` are required.
+
+### 8.10 REVERT (Tier 1)
+
+Creates a **new** grain that restores content from the version before the target. Like `git revert`, this does not undo history -- it creates a new version.
+
+```sql
+REVERT sha256:target_hash
+  REASON "supersession was based on misunderstood context"
+```
+
+### 8.11 Set Operations
+
+```sql
+(RECALL WHERE user_id = "alice" AND query = "project status")
+EXCEPT
+(RECALL WHERE user_id = "bob" AND query = "project status")
+```
+
+Each operand executes independently. Set operations are applied post-retrieval:
+- **UNION:** Deduplicate by content_address, merge scores (max)
+- **INTERSECT:** Keep only grains present in both, merge scores (min)
+- **EXCEPT:** Keep left grains absent from right
+
+### 8.12 LET Bindings
+
+LET bindings name intermediate RECALL results that can be referenced by `$name` in subsequent FROM clauses or WHERE IN sub-expressions.
+
+```sql
+CAL/1
+LET $team_members = RECALL beliefs
+  WHERE relation = "member_of" AND object = "team-alpha" | SUBJECTS;
+
+LET $team_prefs = RECALL beliefs
+  WHERE subject IN ($team_members) AND relation = "prefers";
+
+ASSEMBLE team_context
+  FOR "team alpha's collective preferences"
+  FROM prefs: ($team_prefs),
+       goals: (RECALL goals WHERE subject IN ($team_members) RECENT 10)
+  BUDGET 3000 tokens
+  PRIORITY prefs > goals
+  FORMAT markdown
+```
+
+**LET constraints:**
+- Max 5 LET bindings per request
+- Evaluated once, in declaration order
+- Within a standalone query: cannot reference other LET bindings
+- Within ASSEMBLE: LET bindings can reference prior bindings (linear chaining only, max depth 3)
+- Scoped to the enclosing BATCH or single-statement context
+
+### 8.13 COALESCE
+
+Evaluates argument queries left-to-right. Returns the result of the **first query that returns at least one grain**. Remaining queries are not executed (short-circuit evaluation).
+
+```sql
+COALESCE(
+  RECALL beliefs WHERE subject = "alice" AND relation = "favorite_color",
+  RECALL beliefs WHERE subject = "alice" AND relation = "prefers"
+    AND tags INCLUDE ["color"],
+  RECALL beliefs ABOUT "alice" LIKE "color preference"
+)
+```
+
+**Constraints:** Max 5 branches. All branches MUST be RECALL statements.
+
+---
+
+## 9. Semantic Shortcuts
+
+Shortcuts are **syntactic sugar** -- they desugar to standard WHERE/pipeline clauses. The desugared form is always valid and produces identical results.
+
+### 9.1 ABOUT
+
+```sql
+RECALL beliefs ABOUT "alice"
+-- Desugars to: RECALL beliefs WHERE subject = "alice"
+-- Falls back to: RECALL beliefs WHERE query = "alice" (if no structural match)
+```
+
+### 9.2 RECENT
+
+```sql
+RECALL events ABOUT "alice" RECENT 5
+-- Desugars to: RECALL events WHERE subject = "alice" | ORDER BY time DESC | LIMIT 5
+```
+
+### 9.3 SINCE
+
+```sql
+RECALL events SINCE "last week"
+-- Desugars to: RECALL events WHERE time = "last week"
+```
+
+### 9.4 LIKE
+
+```sql
+RECALL LIKE "machine learning best practices"
+-- Desugars to: RECALL WHERE query = "machine learning best practices"
+```
+
+### 9.5 MY
+
+```sql
+RECALL MY beliefs
+-- Desugars to: RECALL beliefs WHERE user_id = $current_user_id
+```
+
+### 9.6 CONTRADICTIONS
+
+```sql
+RECALL beliefs ABOUT "alice" CONTRADICTIONS
+-- Desugars to: RECALL beliefs WHERE subject = "alice" AND contradicted = true
+--              WITH contradiction_detection
+```
+
+### 9.7 BETWEEN
+
+```sql
+RECALL events BETWEEN 1709251200 AND 1709337600
+-- Desugars to: RECALL events WHERE time BETWEEN 1709251200 AND 1709337600
+```
+
+### 9.8 Shortcut Combination Rules
+
+| Combination | Valid? | Notes |
+|------------|--------|-------|
+| ABOUT + WHERE | Yes | ABOUT becomes an additional AND condition |
+| ABOUT + LIKE | No | Ambiguous -- error `CAL-E060` |
+| RECENT + LIMIT | No | Ambiguous -- error `CAL-E060` |
+| RECENT + ORDER BY | No | Ambiguous -- error `CAL-E060` |
+| SINCE + WHERE time | No | Ambiguous -- error `CAL-E060` |
+| SINCE + BETWEEN | No | Ambiguous -- error `CAL-E060` |
+| MY + WHERE user_id | No | Ambiguous -- error `CAL-E060` |
+| CONTRADICTIONS + WITH contradiction_detection | Yes | Redundant but not an error |
+| AS + FORMAT (in ASSEMBLE) | Yes | AS controls per-source; FORMAT controls assembly |
+
+---
+
+## 10. FORMAT System
+
+### 10.1 Semantic Presets
+
+| Preset | Output Format | Description |
+|--------|--------------|-------------|
+| `structured` / `sml` | SML-based | Semantic tag structure optimised for LLM consumption |
+| `readable` / `markdown` | Markdown | Human-readable, default for ASSEMBLE |
+| `compact` / `text` | Plain text | Minimal, token-efficient |
+| `data` / `json` | JSON | Machine-readable structured data |
+| `yaml` | YAML | YAML structure |
+| `triples` | Triples | Subject-relation-object triples |
+| `toon` | TOON | Token-Oriented Object Notation — CSV-tabular for uniform grain arrays; ~40% fewer tokens vs JSON. Optimised for large RECALL result sets and budget-constrained ASSEMBLE. See Section 10.9. |
+
+### 10.2 Custom Templates (Mustache-subset)
+
+CAL templates use a strict subset of Mustache:
+- Variable interpolation: `{{variable}}`
+- Sections (conditional blocks): `{{#section}}...{{/section}}`
+- Inverted sections (if-not): `{{^section}}...{{/section}}`
+- Comments: `{{! comment }}`
+- Constrained iteration: `{{#each}}` block (capped at 200 iterations)
+
+**Excluded:** Lambdas, partials, set delimiter, unescaped interpolation.
+
+### 10.3 Content Projection Model
+
+CAL output is consumed by LLMs, not database clients. The **Content Projection Model** defines how OMS grain fields map to LLM-friendly output -- what becomes readable text content, what becomes lightweight metadata attributes, and what stays in the machine envelope only.
+
+#### 10.3.1 Design Principle
+
+> **The output format reflects the consumer's mental model, not the storage system's data model.**
+>
+> OMS stores grains as structured triples with rich metadata (hashes, namespaces, short keys, provenance chains). LLMs think in natural language with lightweight structural hints. The projection model bridges these two worlds: it composes grain fields into readable text with just enough structure for the LLM to categorize and weight information.
+
+#### 10.3.2 Per-Grain-Type Content Projection
+
+Each grain type defines a **content rule** (what becomes the text content of the output element) and an **attribute set** (what becomes metadata on the element). All other fields remain in the machine envelope (Section 14.1) and never appear in formatted output.
+
+| Grain Type | Text Content Rule | Default Attributes |
+|-----------|------------------|-------------------|
+| **Belief** | `humanize(relation) + " " + object` | `subject`, `confidence`? |
+| **Event** | `content` | `role`, `time`? |
+| **Goal** | `object` (the objective description) | `subject`, `state`?, `deadline`? |
+| **Action** | `object` (tool result summary) | `tool`, `phase`? |
+| **Observation** | `object` (what was observed) | `observer`? |
+| **Reasoning** | `conclusion` | `type`? |
+| **State** | `plan` (summary) | `context`? |
+| **Workflow** | `steps` (joined as readable text) | `trigger`? |
+| **Consensus** | `object` (the agreed claim) | `threshold`?, `count`? |
+| **Consent** | `purpose` | `action`, `grantor`, `grantee` |
+
+Attributes marked with `?` are included at `standard` and `full` disclosure levels only, omitted at `summary` level.
+
+#### 10.3.3 The `humanize()` Function
+
+The `humanize()` function transforms OMS relation strings into human-readable text:
+
+1. **Strip namespace prefix:** `"mg:prefers"` → `"prefers"`
+2. **Replace underscores with spaces:** `"works_at"` → `"works at"`
+3. **Preserve custom relations as-is after stripping:** `"acme:similar_to"` → `"similar to"`
+
+Implementations MUST apply `humanize()` to relation strings in formatted output. The raw relation value remains available in the machine envelope.
+
+#### 10.3.4 Time Humanization
+
+Timestamps in formatted output SHOULD use relative human-readable form by default:
+
+| Age | Formatted As |
+|-----|-------------|
+| < 1 hour | `"Nm ago"` (e.g., `"23m ago"`) |
+| < 24 hours | `"Nh ago"` (e.g., `"3h ago"`) |
+| < 7 days | `"yesterday"`, `"2d ago"`, etc. |
+| < 30 days | `"2w ago"`, `"3w ago"` |
+| < 1 year | `"Mar 1"`, `"Jan 15"` |
+| >= 1 year | `"Mar 2025"`, `"2024"` |
+
+Full ISO 8601 timestamps remain in the machine envelope. Implementations MAY provide a `WITH iso_timestamps` option to override humanization.
+
+#### 10.3.5 The PROJECT Clause
+
+The `PROJECT` clause overrides default content projection, allowing queries to surface custom or domain-specific fields:
+
+```sql
+CAL/1 RECALL beliefs ABOUT "alice"
+  PROJECT content(relation, object), attr(confidence, x_department)
+  LIMIT 10 AS sml
+```
+
+**Syntax:**
+```
+PROJECT content(field, ...), attr(field, ...)
+```
+
+- `content(...)` -- fields composed into text content via concatenation with space separator. Relation-type fields are passed through `humanize()`.
+- `attr(...)` -- fields rendered as element attributes.
+- Fields not listed in either `content()` or `attr()` are excluded from formatted output.
+
+**Without PROJECT**, the per-grain-type defaults (Section 10.3.2) apply. This is the common case.
+
+**With PROJECT**, the query author has explicit control:
+
+```sql
+-- Surface domain profile fields
+RECALL observations WHERE tags INCLUDE ["profile:healthcare"]
+  PROJECT content(object), attr(observer, hc:patient_id, hc:encounter_id)
+  AS sml
+
+-- Produces:
+-- <observation observer="dr-smith" hc:patient_id="P-1234" hc:encounter_id="E-567">
+--   elevated heart rate detected
+-- </observation>
+```
+
+### 10.4 Semantic Markup Language (SML)
+
+#### 10.4.1 What is SML?
+
+**SML (Semantic Markup Language)** is a flat, tag-based markup format defined by CAL specifically for LLM context consumption. It is not XML. SML uses the tag syntax as a **semantic signalling device** — the tag name tells the LLM what kind of information follows; the attributes carry lightweight decision metadata; the element text is natural language content. SML does not require, and is not validated by, an XML processor.
+
+| Property | SML | Standard XML |
+|----------|-----|--------------|
+| Tag names | Grain type identifiers (`belief`, `goal`, `event`, …) | Arbitrary element names |
+| Text content | Natural language prose, not decomposed triples | Structured data |
+| Attributes | Human-readable metadata hints (`confidence`, `state`, `time`) | Machine-parseable key-value pairs |
+| Nesting | **Flat only** — no nested elements (one `<context>` envelope only) | Arbitrary depth |
+| Document declaration | None | `<?xml …?>`, DTD, prologue |
+| Parser requirement | None — consumed directly by an LLM | Conforming XML processor |
+| Schema validation | Not applicable | DTD / XSD validation |
+| Escape sequences | Not required | `&amp;`, `&lt;`, etc. required |
+
+SML is the default format for the `structured` preset (alias `sml`).
+
+#### 10.4.2 Structural Rules
+
+The formatted output uses a **flat, semantic structure**:
+
+1. **Tag names ARE the grain type.** No generic `<grain>` wrapper — use `<belief>`, `<goal>`, `<event>`, etc.
+2. **No group wrappers.** No `<source>`, `<beliefs>`, or other container elements. Whitespace separates grain groups.
+3. **Storage internals never appear.** No hashes, counts, namespaces, or OMS-internal fields.
+4. **Text content reads as natural language.** The element text is the projected content, not decomposed triples.
+5. **One envelope element.** The `<context>` wrapper carries only the `intent` attribute. It is the sole container.
+
+#### 10.4.3 Comprehensive Example — All 10 Grain Types
+
+The following example shows a single assembled context covering every grain type. The scenario: an agent helping alice prepare her Q1 engineering review.
+
+```sml
+<context intent="helping alice prepare her Q1 engineering review">
+
+  <belief subject="alice" confidence="0.95">prefers dark mode in all tools</belief>
+  <belief subject="alice" confidence="0.88">requires keyboard shortcuts for productivity</belief>
+  <belief subject="alice" confidence="0.82">works best in deep-focus blocks of 90 minutes</belief>
+
+  <goal subject="alice" state="active" deadline="2026-03-15">complete Q1 engineering review presentation</goal>
+  <goal subject="alice" state="active">reduce P0 incident rate by 20% in Q2</goal>
+
+  <event role="user" time="10m ago">Can you help me pull together the Q1 metrics?</event>
+  <event role="assistant" time="10m ago">Sure — retrieving deployment counts, incident data, and velocity now.</event>
+  <event role="user" time="8m ago">Focus on the reliability numbers first.</event>
+
+  <action tool="query_metrics" phase="completed">retrieved 47 deployments and 3 P0 incidents for Q1 2026</action>
+  <action tool="search_docs" phase="completed">found Q1 review template in confluence/engineering/reviews</action>
+
+  <observation observer="system">alice opened incident-dashboard at 09:14 UTC</observation>
+  <observation observer="system" source="calendar">Q1 review presentation scheduled for 2026-03-15 14:00 UTC</observation>
+
+  <reasoning type="deductive">alice is prioritising reliability given 3 P0 incidents; lead with incident reduction narrative</reasoning>
+  <reasoning type="abductive">low velocity in week 8 likely caused by the infra migration; flag as contextual outlier</reasoning>
+
+  <state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>
+
+  <workflow trigger="review_prep_requested">1. retrieve Q1 metrics  2. identify narrative arc  3. draft slide outline  4. populate data  5. send for review by 2026-03-14</workflow>
+
+  <consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>
+
+  <consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>
+
+</context>
+```
+
+Each element maps directly to one grain type. The LLM reads the tag to understand the epistemic status of the content — a `<belief>` carries a known confidence, a `<reasoning>` signals inference, a `<consent>` signals an explicit permission grant — without needing to parse attribute schemas or understand OMS internals.
+
+#### 10.4.4 Progressive Disclosure
+
+Progressive disclosure controls **metadata density on a flat structure**, not nesting depth. The element shape stays the same across all levels — only the number of attributes changes.
+
+| Level | Example |
+|-------|---------|
+| `summary` | `<belief subject="alice">prefers dark mode</belief>` |
+| `standard` | `<belief subject="alice" confidence="0.92">prefers dark mode</belief>` |
+| `full` | `<belief subject="alice" confidence="0.92" source="explicit" observed="2d ago">prefers dark mode</belief>` |
+
+### 10.5 Template Variables
+
+#### Assembly-Level Variables
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `{{assembly.name}}` | string | Context name |
+| `{{assembly.intent}}` | string | FOR clause text |
+| `{{assembly.source_count}}` | integer | Number of sources |
+| `{{assembly.grain_count}}` | integer | Total grains included |
+| `{{budget.total}}` | integer | Total budget |
+| `{{budget.used}}` | integer | Budget consumed |
+| `{{budget.remaining}}` | integer | Remaining budget |
+| `{{budget.unit}}` | string | `"tokens"` or `"grains"` |
+| `{{budget.utilization}}` | number | 0.0-1.0 utilization ratio |
+| `{{disclosure.level}}` | string | Disclosure level |
+| `{{timestamp}}` | string | ISO 8601 assembly timestamp |
+
+#### Source-Level Variables
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `{{source.label}}` | string | Source label |
+| `{{source.index}}` | integer | 0-based position |
+| `{{source.priority}}` | integer | 1-based priority rank |
+| `{{source.grain_count}}` | integer | Grains in this source |
+| `{{source.tokens_used}}` | integer | Tokens consumed |
+| `{{source.truncated}}` | boolean | Whether grains were cut for budget |
+
+#### Grain-Level Variables
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `{{grain.content}}` | string | **Projected text content** (per Section 10.3.2 content rules) |
+| `{{grain.type}}` | string | Grain type (used as SML element name) |
+| `{{grain.subject}}` | string | Triple subject |
+| `{{grain.relation}}` | string | Raw triple relation (with namespace) |
+| `{{grain.humanized_relation}}` | string | Humanized relation (namespace stripped, underscores replaced) |
+| `{{grain.object}}` | string | Triple object |
+| `{{grain.confidence}}` | number | Confidence [0.0, 1.0] |
+| `{{grain.importance}}` | number | Importance [0.0, 1.0] |
+| `{{grain.tags}}` | string | Comma-separated tags |
+| `{{grain.created_at}}` | string | ISO 8601 timestamp |
+| `{{grain.relative_time}}` | string | Humanized relative time (e.g., "2h ago") |
+| `{{grain.score}}` | number | Relevance score |
+| `{{grain.hash}}` | string | Content address (for machine envelope use, not LLM output) |
+| `{{#grain.is_full}}` | section | True when disclosure = full |
+| `{{#grain.is_summary}}` | section | True when disclosure = summary |
+
+### 10.6 DEFINE TEMPLATE
+
+Templates use the flat semantic model. The `ELEMENT` section defines how each grain renders, and elements are emitted directly without group wrappers:
+
+```sql
+CAL/1 DEFINE TEMPLATE semantic_sml
+  EXTENDS structured
+  HEADER {
+<context intent="{{assembly.intent}}">
+  }
+  ELEMENT {
+  <{{grain.type}} subject="{{grain.subject}}"{{#grain.confidence}} confidence="{{grain.confidence}}"{{/grain.confidence}}>{{grain.content}}</{{grain.type}}>
+  }
+  ELEMENT_SUMMARY {
+  <{{grain.type}} subject="{{grain.subject}}">{{grain.content}}</{{grain.type}}>
+  }
+  SOURCE_BREAK {
+
+  }
+  FOOTER {
+</context>
+  }
+```
+
+**Usage:**
+```sql
+CAL/1 ASSEMBLE conversation_context
+  FOR "helping alice with her project"
+  FROM beliefs: (RECALL beliefs ABOUT "alice" LIMIT 20),
+       goals: (RECALL goals ABOUT "alice" RECENT 5)
+  BUDGET 3000 tokens
+  FORMAT TEMPLATE semantic_sml
+```
+
+**Inline templates:**
+```sql
+FORMAT TEMPLATE {
+  ELEMENT {
+- [{{grain.type}}] {{grain.content}}{{#grain.confidence}} ({{grain.confidence}}){{/grain.confidence}}
+  }
+}
+```
+
+**All 10 grain types rendered:**
+```sml
+<context intent="helping alice prepare her Q1 engineering review">
+
+  <belief subject="alice" confidence="0.95">prefers dark mode in all tools</belief>
+  <belief subject="alice" confidence="0.88">requires keyboard shortcuts for productivity</belief>
+  <belief subject="alice" confidence="0.82">works best in deep-focus blocks of 90 minutes</belief>
+
+  <goal subject="alice" state="active" deadline="2026-03-15">complete Q1 engineering review presentation</goal>
+  <goal subject="alice" state="active">reduce P0 incident rate by 20% in Q2</goal>
+
+  <event role="user" time="10m ago">Can you help me pull together the Q1 metrics?</event>
+  <event role="assistant" time="10m ago">Sure — retrieving deployment counts, incident data, and velocity now.</event>
+  <event role="user" time="8m ago">Focus on the reliability numbers first.</event>
+
+  <action tool="query_metrics" phase="completed">retrieved 47 deployments and 3 P0 incidents for Q1 2026</action>
+  <action tool="search_docs" phase="completed">found Q1 review template in confluence/engineering/reviews</action>
+
+  <observation observer="system">alice opened incident-dashboard at 09:14 UTC</observation>
+  <observation observer="system" source="calendar">Q1 review presentation scheduled for 2026-03-15 14:00 UTC</observation>
+
+  <reasoning type="deductive">alice is prioritising reliability given 3 P0 incidents; lead with incident reduction narrative</reasoning>
+  <reasoning type="abductive">low velocity in week 8 likely caused by the infra migration; flag as contextual outlier</reasoning>
+
+  <state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>
+
+  <workflow trigger="review_prep_requested">1. retrieve Q1 metrics  2. identify narrative arc  3. draft slide outline  4. populate data  5. send for review by 2026-03-14</workflow>
+
+  <consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>
+
+  <consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>
+
+</context>
+```
+
+### 10.7 Template Inheritance
+
+Templates inherit from presets via `EXTENDS`. Sections not defined in the template use the parent preset's definition. Inheritance depth is limited to 1 (template -> preset only). Default parent is `readable`.
+
+The `data` preset cannot be extended (it outputs structural JSON, not template-driven text).
+
+### 10.8 Template Safety Model
+
+Templates are rendering instructions, not programs:
+- No file system access, no code execution, no network requests
+- No access to environment variables or other namespaces
+- Undefined variables render as empty string
+- `{{#each}}` capped at 200 iterations
+- Output bounded by budget * 2 characters
+- Validated at definition time for syntax, known variables, section balance, and size
+
+**Template Constraints:**
+
+| Constraint | Limit |
+|-----------|-------|
+| Max template body size | 4096 bytes |
+| Max templates per namespace | 50 |
+| Max nesting depth | 5 levels |
+| Max `{{#each}}` iterations | 200 |
+| Template name length | 64 characters |
+| Inheritance depth | 1 |
+| Variable set | Closed |
+
+### 10.9 TOON — Token-Oriented Object Notation
+
+#### 10.9.1 What is TOON?
+
+**TOON (Token-Oriented Object Notation)** is a compact, LLM-native encoding format defined by the [TOON specification](https://github.com/toon-format/spec) (v3.0). It combines:
+
+- **YAML-like indentation** for nested or non-uniform objects
+- **CSV-style tabular layout** for uniform arrays of objects
+
+For CAL's primary output shape — arrays of grains of the same type — TOON's tabular mode achieves approximately **40% fewer tokens** compared to JSON while preserving full semantic fidelity. The same content projection rules from Section 10.3 apply: `humanize()`, time humanization, and per-grain-type content rules all carry through.
+
+TOON is complementary to SML, not a replacement:
+
+| Property | SML | TOON |
+|----------|-----|------|
+| Semantic tag names | Yes (`<belief>`, `<goal>`, …) | No — grain type in section header only |
+| Token efficiency | Moderate | High (~40% fewer vs JSON) |
+| Uniform arrays | One element per line | CSV table — optimal |
+| Mixed grain types | Natural (each type has its own tag) | Grouped sections |
+| LLM-native | Yes | Yes |
+| Best for | Rich context with clear epistemic signals | Large result sets, tight budgets |
+
+#### 10.9.2 When to Use TOON
+
+Prefer `FORMAT toon` / `AS toon` when:
+
+1. **Large RECALL result sets** — uniform grain arrays of 20+ grains where token savings matter.
+2. **Tight ASSEMBLE budgets** — when the BUDGET clause is at or near the limit of available context.
+3. **Homogeneous source queries** — ASSEMBLE sources that each contain a single grain type.
+
+Prefer SML when:
+- The LLM must make epistemic decisions per grain (trust calibration based on tag name).
+- Mixed grain types appear within a single source without logical grouping.
+- The downstream prompt system is tuned for `<tag>` signals.
+
+#### 10.9.3 TOON Rendering Rules for RECALL Results
+
+For a `RECALL` result returning N grains of a single type, the TOON output is a **root-level array document**. The first line is the TOON array header (detected as root array by §5 of the TOON spec); rows follow at depth 0 (no indentation):
+
+```
+type[N]{col1,col2,...}:
+value1,value2,...
+value1,value2,...
+...
+```
+
+Where:
+- `type` is the grain type (plural form, lowercase): `beliefs`, `events`, `goals`, etc.
+- `[N]` is the count of rows.
+- `{col1,col2,...}` are the projected field names.
+- The trailing `:` on the header is **required** by the TOON grammar (`header = [key] bracket-seg [fields-seg] ":"`).
+- Rows follow at depth 0 — no indentation — because the array is the root document.
+
+**Column set for each grain type** (same content projection as Section 10.3.2):
+
+| Grain Type | Columns (standard disclosure) |
+|-----------|-------------------------------|
+| `beliefs` | `subject`, `content`, `confidence` |
+| `events` | `role`, `time`, `content` |
+| `goals` | `subject`, `content`, `state` |
+| `actions` | `tool`, `phase`, `content` |
+| `observations` | `observer`, `content` |
+| `reasonings` | `type`, `content` |
+| `states` | `context`, `content` |
+| `workflows` | `trigger`, `content` |
+| `consensuses` | `threshold`, `count`, `content` |
+| `consents` | `grantor`, `grantee`, `action`, `content` |
+
+At `summary` disclosure, `confidence`, `state`, `phase`, and `type` columns are omitted.
+At `full` disclosure, additional columns `source` and `observed` are appended.
+
+**Example — `RECALL beliefs ABOUT "alice" LIMIT 3 AS toon`:**
+```
+beliefs[3]{subject,content,confidence}:
+alice,prefers dark mode,0.95
+alice,prefers vim,0.9
+alice,works best in deep-focus blocks of 90 minutes,0.82
+```
+
+**Example — `RECALL events WHERE user_id = "alice" RECENT 3 AS toon`:**
+```
+events[3]{role,time,content}:
+user,10m ago,Can you help me pull together the Q1 metrics?
+assistant,10m ago,Sure — retrieving deployment counts and incident data.
+user,8m ago,Focus on the reliability numbers first.
+```
+
+**String quoting.** A value in a tabular row MUST be double-quoted if it: contains the active delimiter (comma by default), has leading or trailing whitespace, is empty, matches a reserved literal (`true`, `false`, `null`), matches a numeric pattern, contains a leading hyphen, or contains any of `:`, `"`, `\`, `[`, `]`, `{`, `}`, or control characters. Only five escape sequences are valid inside quoted strings: `\\`, `\"`, `\n`, `\r`, `\t`. No `\u` escapes — Unicode characters appear as literal UTF-8. Implementations MUST apply `humanize()` to relation fields and time humanization to timestamp fields, identical to SML.
+
+**Number canonicalization.** Numeric values (confidence, importance, scores) MUST be emitted in canonical decimal form: no exponent notation, no leading zeros except `0` itself, no trailing fractional zeros (`0.90` → `0.9`, `1.5000` → `1.5`). `NaN` and `±Infinity` map to `null`.
+
+#### 10.9.4 TOON Rendering Rules for ASSEMBLE Results
+
+For an `ASSEMBLE` result, the TOON output is a **root-level object document**. The first line is a metadata key-value pair, which causes the TOON parser to detect root form as "object" (per §5 of the TOON spec). Named grain-type arrays are then properties of that object; their tabular rows are indented **2 spaces** (depth+1):
+
+```
+context: <context_name>
+intent: <for_clause_text>
+tokens: <used>/<total>
+<grain_type>[N]{col1,col2,...}:
+  row1_val1,row1_val2,...
+  row2_val1,row2_val2,...
+<grain_type>[N]{col1,col2,...}:
+  row1_val1,row1_val2,...
+  ...
+```
+
+Rules:
+- The metadata header uses `key: value` format (colon-space separator).
+- The trailing `:` on every array header is **required** by the TOON grammar.
+- Tabular rows are indented **2 spaces** because they are named properties of the root object.
+- No blank lines between tabular rows within a group; one blank line between groups.
+- Source labels are omitted from the output (ASSEMBLE TOON is grain-group-centric). To expose source attribution, use `FORMAT sml`.
+- Within a group, all grains MUST be of the same type. If a source returns mixed types, the executor MUST split them into separate same-type groups.
+- Groups are ordered by priority (highest priority first, matching the `PRIORITY` clause).
+
+**Example — ASSEMBLE FORMAT toon:**
+
+```
+context: agent_context
+intent: helping alice prepare her Q1 engineering review
+tokens: 1847/2000
+beliefs[3]{subject,content,confidence}:
+  alice,prefers dark mode,0.95
+  alice,prefers vim,0.9
+  alice,works best in deep-focus blocks of 90 minutes,0.82
+goals[2]{subject,content,state,deadline}:
+  alice,complete Q1 engineering review,active,2026-03-15
+  alice,reduce P0 incident rate by 20% in Q2,active,-
+events[3]{role,time,content}:
+  user,10m ago,Can you help me pull together the Q1 metrics?
+  assistant,10m ago,Sure — retrieving deployment counts and incident data.
+  user,8m ago,Focus on the reliability numbers first.
+```
+
+#### 10.9.5 Auto-TOON (Budget Pressure Hint)
+
+When no explicit `FORMAT` is specified and all of the following conditions hold, implementations MAY automatically select `toon` as the output format instead of the default `sml`:
+
+1. A `BUDGET` clause is present.
+2. Estimated token utilization (from the EXPLAIN plan) exceeds **85%** of the budget.
+3. All ASSEMBLE sources return a single grain type each (enabling full tabular mode).
+
+When auto-TOON activates, the response MUST include a warning:
+```json
+{ "code": "CAL-W005", "message": "FORMAT auto-selected as toon due to budget pressure (>85% utilization estimate). Specify FORMAT explicitly to suppress this warning." }
+```
+
+Auto-TOON is opt-in at the server level. Servers report whether it is active via `DESCRIBE capabilities` (`auto_toon_enabled`).
+
+#### 10.9.6 TOON and PROJECT
+
+The `PROJECT` clause (Section 10.3.5) works with TOON. The projected fields become the TOON column headers:
+
+```sql
+CAL/1 RECALL observations WHERE tags INCLUDE ["profile:healthcare"]
+  | PROJECT content(object), attr(hc:patient_id, hc:encounter_id)
+  | LIMIT 10 AS toon
+```
+
+Output (root array — RECALL result):
+```
+observations[2]{content,hc:patient_id,hc:encounter_id}:
+elevated heart rate detected,P-1234,E-567
+blood pressure within normal range,P-1235,E-568
+```
+
+#### 10.9.7 TOON and Streaming
+
+TOON output is compatible with the STREAM protocol (Section 11). When streaming TOON, each `source_data` chunk carries one or more complete CSV rows — never partial rows. The metadata header is emitted in the first chunk.
+
+#### 10.9.8 TOON Wire Format in application/json+cal
+
+In `application/json+cal`, the formatted TOON output is a plain string in `formatted_context.text` (for ASSEMBLE) or `formatted` (for RECALL). The media type annotation uses `"format": "toon"`.
+
+---
+
+## 11. Streaming Protocol
+
+### 11.1 Event Types
+
+Streaming ASSEMBLE uses a typed event stream. Events are delivered in causal order.
+
+| Event Type | Phase | Description |
+|-----------|-------|-------------|
+| `assembly_started` | Init | Stream opened, assembly ID assigned |
+| `source_started` | Source Resolution | A RECALL query has begun |
+| `source_completed` | Source Resolution | A RECALL query has finished |
+| `dedup_completed` | Deduplication | Cross-source dedup finished |
+| `budget_allocated` | Budget Allocation | Token budget distributed |
+| `disclosure_decided` | Progressive Disclosure | Disclosure levels assigned |
+| `chunk` | Formatting | A chunk of formatted output |
+| `assembly_completed` | Done | All phases complete |
+| `error` | Any | An error occurred |
+| `cancelled` | Any | Stream cancelled |
+
+**Ordering invariant:**
+```
+assembly_started
+  -> source_started(s1) -> source_completed(s1)
+  -> source_started(s2) -> source_completed(s2)
+  -> ...                                          (sources may interleave)
+  -> dedup_completed
+  -> budget_allocated
+  -> chunk(1) -> chunk(2) -> ... -> chunk(n)
+  -> assembly_completed
+```
+
+### 11.2 STREAM Clause
+
+```sql
+ASSEMBLE user_context
+  FROM beliefs: (RECALL beliefs ABOUT "alice")
+  BUDGET 2000 tokens
+  STREAM { all }                              -- all events
+  -- or: STREAM { progress, chunks }          -- specific events
+  -- or: STREAM { all, chunk_size = 200 }     -- custom chunk size
+  -- or: STREAM                               -- bare = all events
+```
+
+| Option | Events Emitted |
+|--------|---------------|
+| `progress` | assembly_started, source_started, source_completed, assembly_completed |
+| `budget` | dedup_completed, budget_allocated, disclosure_decided |
+| `chunks` | chunk (formatted output) |
+| `all` | All of the above |
+| `chunk_size = N` | Target tokens per chunk (default 100, min 20, max 1000) |
+
+`error` and `cancelled` events are ALWAYS emitted regardless of options.
+
+### 11.3 Transport Bindings
+
+#### SSE (Server-Sent Events) -- RECOMMENDED
+
+```http
+POST /memories/{id}/cal HTTP/1.1
+Content-Type: application/json+cal
+Accept: text/event-stream
+
+event: assembly_started
+data: {"type":"assembly_started","assembly_id":"asm_a1b2c3d4",...}
+
+event: chunk
+data: {"type":"chunk","chunk_index":0,"content":"## Context...","tokens":18,...}
+
+event: assembly_completed
+data: {"type":"assembly_completed","summary":{...}}
+```
+
+#### NDJSON (Fallback)
+
+```http
+POST /memories/{id}/cal HTTP/1.1
+Accept: application/x-ndjson
+
+{"type":"assembly_started","assembly_id":"asm_a1b2c3d4",...}
+{"type":"chunk","chunk_index":0,...}
+{"type":"assembly_completed",...}
+```
+
+#### WebSocket
+
+Full-duplex with explicit pause/resume/cancel:
+
+```json
+{"action": "assemble", "request_id": "req_001", "payload": {...}}
+{"action": "cancel", "assembly_id": "asm_a1b2c3d4"}
+{"action": "pause", "assembly_id": "asm_a1b2c3d4"}
+{"action": "resume", "assembly_id": "asm_a1b2c3d4"}
+```
+
+### 11.4 Progressive Budget Updates
+
+Budget information is refined through the streaming phases: `assembly_started` (total known), `source_completed` (per-source estimates), `budget_allocated` (final allocation), `chunk` (running countdown via `budget_remaining`), `assembly_completed` (final utilization).
+
+If a source fails, its allocated budget is redistributed and a revised `budget_allocated` event is emitted.
+
+### 11.5 Cancellation
+
+- **HTTP:** Client closes connection. Server also supports `DELETE /memories/{id}/cal/stream/{assembly_id}`.
+- **WebSocket:** Client sends `{"action": "cancel", "assembly_id": "..."}`.
+- Cancellation is best-effort. Partial results are valid and usable.
+- Cancellation MUST be recorded in the audit trail.
+
+### 11.6 Backpressure
+
+- **SSE:** TCP-level flow control. Server buffers max 64KB unsent events. Stall timeout: 30 seconds.
+- **WebSocket:** Explicit `pause`/`resume` actions. Chunk emission pauses; progress events continue.
+
+**Streaming Constraints:**
+
+| Constraint | Limit |
+|-----------|-------|
+| Max concurrent streams per client | 3 |
+| Max event buffer per stream | 64 KB |
+| Stream reconnection window | 10 s |
+| Min chunk_size | 20 tokens |
+| Max chunk_size | 1000 tokens |
+| Default chunk_size | 100 tokens |
+| Backpressure stall timeout | 30 s |
+
+---
+
+## 12. Domain Profile Querying
+
+OMS defines domain profiles (healthcare, legal, finance, robotics, science, consumer, integration). CAL provides structured access to domain-tagged grains.
+
+### 12.1 Profile Querying via Tags
+
+```sql
+RECALL WHERE tags INCLUDE ["profile:healthcare"]
+RECALL beliefs WHERE tags INCLUDE ["profile:healthcare"]
+  AND subject = "patient:P-12345" AND relation IS PREFERENCE
+```
+
+### 12.2 Domain-Prefixed Fields
+
+Domain-specific fields use OMS domain prefix convention:
+
+| Domain | Prefix | Example Fields |
+|--------|--------|---------------|
+| Healthcare | `hc:` | `hc:patient_id`, `hc:encounter_id`, `hc:provider_id`, `hc:condition_code`, `hc:phi_category` |
+| Legal | `legal:` | `legal:case_id`, `legal:jurisdiction`, `legal:privilege_status`, `legal:retention_category` |
+| Finance | `fin:` | `fin:account_id`, `fin:transaction_id`, `fin:risk_category`, `fin:compliance_flag` |
+| Robotics | `rob:` | `rob:device_id`, `rob:coordinate_frame`, `rob:safety_zone` |
+| Science | `sci:` | `sci:experiment_id`, `sci:dataset_id`, `sci:methodology`, `sci:reproducibility_status` |
+| Consumer | `con:` | `con:session_context`, `con:interaction_channel` |
+| Integration | `int:` | `int:source_system`, `int:correlation_id`, `int:sync_status` |
+
+**Example:**
+```sql
+RECALL beliefs WHERE tags INCLUDE ["profile:healthcare"]
+  AND hc:patient_id = "P-12345"
+  AND hc:condition_code IN ("J06.9", "J20.9")
+  AND relation = "mg:knows"
+  | ORDER BY time DESC | LIMIT 20
+```
+
+The parser SHOULD emit warning `CAL-W002` if a domain field is used without the corresponding `profile:` tag.
+
+---
+
+## 13. Store Protocol Mapping
+
+Every CAL statement maps to one or more OMS Store Protocol operations (OMS §28.4). This mapping is deterministic.
+
+| CAL Statement | Min Store Ops | Max Store Ops | Operations |
+|--------------|--------------|--------------|------------|
+| RECALL | 1 | 1 | `query` or `search` |
+| EXISTS | 1 | 1 | `exists` |
+| HISTORY (hash) | 1 | 101 | `get` + chain walk |
+| HISTORY (triple) | 1 | 1 | `query(include_superseded=true)` |
+| EXPLAIN | 0 | 0 | Compile-time only |
+| ADD | 1 | 1 | `put` |
+| SUPERSEDE | 2 | 3 | `get` + `supersede` |
+| REVERT | 3 | 4 | `get` + `get` + `supersede` |
+| Set operation | 2 | 2 | One query per operand |
+| ASSEMBLE | N | N | N x `query`/`search` (one per source) |
+
+---
+
+## 14. Response Model
+
+### 14.1 Machine Envelope
+
+Every CAL response includes a `_cal` metadata block:
+
+```json
+{
+  "_cal": {
+    "version": "1.0",
+    "statement_type": "recall",
+    "tier": 0,
+    "query_hash": "sha256:...",
+    "duration_ms": 42,
+    "budget": {
+      "tokens_used": 1847,
+      "grains_returned": 8,
+      "grains_scanned": 156
+    }
+  },
+  "results": [...],
+  "total": 42,
+  "next_cursor": "cursor:eyJ..."
+}
+```
+
+### 14.2 LLM Content Layer
+
+A formatted representation for direct insertion into LLM context windows. The content layer uses the **Content Projection Model** (Section 10.3) to transform grain fields into natural language with lightweight structural hints.
+
+**SML format** (default for `structured` / `sml`):
+```sml
+<context intent="helping alice with project">
+
+  <belief subject="alice" confidence="0.92">prefers dark mode</belief>
+  <belief subject="alice" confidence="0.88">requires keyboard shortcuts</belief>
+
+  <goal subject="alice" state="active">complete Q1 review</goal>
+
+</context>
+```
+
+**Markdown format** (default for `readable` / `markdown`):
+```markdown
+## Context: helping alice with project
+
+**Beliefs**
+- alice prefers dark mode (confidence: 0.92)
+- alice requires keyboard shortcuts (confidence: 0.88)
+
+**Goals**
+- alice: complete Q1 review (active)
+```
+
+**Compact format** (for `compact` / `text`):
+```
+[belief] alice prefers dark mode (0.92)
+[belief] alice requires keyboard shortcuts (0.88)
+[goal] alice: complete Q1 review (active)
+```
+
+The machine envelope (Section 14.1) carries hashes, namespaces, full timestamps, and other storage metadata. These MUST NOT appear in the LLM content layer.
+
+### 14.3 Progressive Disclosure
+
+| Level | Metadata Density | When Used |
+|-------|-----------------|-----------|
+| `summary` | Tag name + subject + content only | Token budget tight (<1000 tokens) |
+| `standard` | + confidence, role, state, time | Default |
+| `full` | + source_type, importance, tags, verification_status | Token budget generous or LIMIT <= 5 |
+
+Progressive disclosure controls **metadata density on a flat structure**, not nesting depth. The element shape stays the same across all levels -- only the number of attributes changes.
+
+### 14.4 Per-Grain-Type Content Projection
+
+Each grain type projects its fields into a **text content** string and **attribute set** using the rules defined in Section 10.3.2. The following table shows the projected output for each type:
+
+| Grain Type | Projected Text Content | Example Output (sml) |
+|-----------|----------------------|---------------------|
+| Belief | `humanize(relation) + " " + object` | `<belief subject="alice" confidence="0.95">prefers dark mode in all tools</belief>` |
+| Event | `content` | `<event role="user" time="10m ago">Can you help me pull together the Q1 metrics?</event>` |
+| Goal | `object` | `<goal subject="alice" state="active" deadline="2026-03-15">complete Q1 engineering review presentation</goal>` |
+| Action | `object` (tool result) | `<action tool="query_metrics" phase="completed">retrieved 47 deployments and 3 P0 incidents for Q1 2026</action>` |
+| Observation | `object` | `<observation observer="system">alice opened incident-dashboard at 09:14 UTC</observation>` |
+| Reasoning | `conclusion` | `<reasoning type="deductive">alice is prioritising reliability given 3 P0 incidents; lead with incident reduction narrative</reasoning>` |
+| State | `plan` summary | `<state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>` |
+| Workflow | `steps` joined | `<workflow trigger="review_prep_requested">1. retrieve Q1 metrics  2. identify narrative arc  3. draft slide outline  4. populate data  5. send for review by 2026-03-14</workflow>` |
+| Consensus | `object` | `<consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>` |
+| Consent | `purpose` | `<consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>` |
+
+The `PROJECT` clause (Section 10.3.5) overrides these defaults when custom or domain-specific fields must be surfaced.
+
+---
+
+## 15. Dual Wire Format
+
+### 15.1 Media Types
+
+| Format | Media Type | Use Case |
+|--------|-----------|----------|
+| Text | `text/cal` | LLM generation, human authoring, documentation |
+| JSON | `application/json+cal` | Programmatic construction, structured output |
+
+### 15.2 Bijective Mapping
+
+Every valid CAL statement has exactly one representation in each format, and conversion between them is lossless.
+
+**text/cal:**
+```
+CAL/1 RECALL beliefs ABOUT "alice" WHERE confidence >= 0.8 RECENT 5 AS markdown
+```
+
+**application/json+cal:**
+```json
+{
+  "cal_version": 1,
+  "statement": "recall",
+  "grain_type": "beliefs",
+  "about": "alice",
+  "where": [{ "field": "confidence", "op": ">=", "value": 0.8 }],
+  "recent": 5,
+  "as": "markdown"
+}
+```
+
+### 15.3 Round-Trip Guarantee
+
+`parse(serialize(parse(text))) == parse(text)` and `serialize(parse(serialize(json))) == serialize(json)`. Whitespace may differ; semantic content is identical.
+
+### 15.4 Content Negotiation
+
+Standard HTTP content negotiation applies. The `Accept` header controls response format. If absent, response format matches request format.
+
+### 15.5 JSON Schema
+
+The JSON format has published JSON Schemas (draft 2020-12):
+- Request: `https://cal-spec.org/schema/v1/cal-request.schema.json`
+- Response: `https://cal-spec.org/schema/v1/cal-response.schema.json`
+
+Implementations MUST validate incoming `application/json+cal` against the schema before execution.
+
+---
+
+## 16. Internationalization
+
+### 16.1 Character Encoding
+
+CAL queries and responses MUST be UTF-8 encoded. Invalid UTF-8 sequences produce error `CAL-E070: InvalidUTF8`.
+
+### 16.2 Unicode Normalization
+
+All string comparisons use **NFC** normalization. String literals are NFC-normalized at parse time. Stored grain content is NFC-normalized at write time. Implementations MUST normalize.
+
+### 16.3 Bidirectional Text (Bidi)
+
+Grain content is stored in logical order. CAL rejects string literals containing bidi override characters (U+202A-U+202E, U+2066-U+2069) to prevent bidi-based spoofing attacks (error `CAL-E071: BidiOverrideRejected`).
+
+### 16.4 Cross-Lingual Search
+
+When `query = "..."`, `LIKE "..."`, or `ABOUT "..."` triggers semantic search, the search SHOULD work across languages when multilingual embeddings are available. Cross-lingual search is REQUIRED at Extended conformance level.
+
+Implementations MUST declare cross-lingual capability in `DESCRIBE capabilities`:
+```json
+{
+  "cross_lingual_search": true,
+  "embedding_model": "multilingual-e5-large",
+  "supported_languages": ["en", "es", "fr", "de", "ja", "zh", "ar"]
+}
+```
+
+### 16.5 Locale-Aware Sorting
+
+Default: Unicode code point order (binary sort). Locale-aware sorting requested via `WITH locale("xx")`:
+
+```sql
+RECALL beliefs ABOUT "alice" | ORDER BY object ASC WITH locale("de")
+```
+
+Locale-aware sorting is optional. Implementations that do not support it MUST ignore the `locale()` option with a warning.
+
+### 16.6 Identifier Safety
+
+Field names and keywords are ASCII-only, never subject to Unicode normalization. This prevents confusion attacks with visually similar Unicode characters.
+
+---
+
+## 17. Execution Model
+
+### 17.1 Query Pipeline (Tier 0)
+
+```
+CAL String
+    |
+    v
++----------+    +---------+    +----------+    +-----------+    +----------+
+|  LEXER   |--->| PARSER  |--->|VALIDATOR |--->| PLANNER   |--->| EXECUTOR |
+| Tokens   |    |CalStmt  |    |Type chk  |    |Query plan |    | Results  |
++----------+    +---------+    +----------+    +-----------+    +----------+
+                                    |               |                |
+                                    |          +----v------+   +----v----+
+                                    |          |POLICY GATE|   | AUDIT   |
+                                    |          |check_read |   | TRAIL   |
+                                    |          +-----------+   +---------+
+                               +----v-----+
+                               | FIREWALL |
+                               |complexity|
+                               |deny list |
+                               +----------+
+```
+
+### 17.2 Evolve Pipeline (Tier 1)
+
+```
+CAL String (ADD, SUPERSEDE, or REVERT)
+    |
+    v
++----------+    +---------+    +----------+    +-----------+
+|  LEXER   |--->| PARSER  |--->|VALIDATOR |--->| TIER CHECK|
+| Tokens   |    |CalStmt  |    |Type chk  |    |Token ok?  |
++----------+    +---------+    +----------+    +-----+-----+
+                                                      |
+                   +----------------------------------+
+                   |
+             +-----v------+    +-----------+    +----------+
+             |POLICY GATE |--->| EXECUTOR  |--->|  AUDIT   |
+             |check_write |    | add() or  |    |  TRAIL   |
+             +------------+    | supersede |    +----------+
+                               +-----------+
+```
+
+### 17.3 Resource Limits
+
+| Resource | Limit | Spec-mandated? |
+|----------|-------|---------------|
+| Max query string length | 8,192 bytes | Yes |
+| Max LIMIT value | 1,000 | Implementation-configurable |
+| Default LIMIT (if omitted) | 20 | Yes |
+| Max subquery nesting | 3 levels | Yes |
+| Max pipeline stages | 5 | Yes |
+| Max IN literal set size | 100 | Implementation-configurable |
+| Max set operands | 5 | Yes |
+| Max parameters per query | 20 | Yes |
+| Query timeout | 5,000ms | Implementation-configurable |
+| ASSEMBLE timeout | 10,000ms | Implementation-configurable |
+| Parse time budget (queries <=4KB) | <1ms | Yes |
+| Max ADD per minute | 20 | Implementation-configurable |
+| Max SUPERSEDE per minute | 10 | Implementation-configurable |
+| Max REVERT per minute | 5 | Implementation-configurable |
+| Max SET clauses per ADD | 6 | Yes (3 required + 3 optional base) |
+| Max SET clauses per SUPERSEDE | 4 | Yes |
+| Max REASON length | 500 chars | Yes |
+| Max BATCH queries | 10 | Yes |
+| Max COALESCE branches | 5 | Yes |
+| Max LET bindings | 5 | Yes |
+| Max ASSEMBLE sources | 8 | Yes |
+| Max BUDGET tokens | 16,000 | Yes |
+| Max BUDGET grains | 200 | Yes |
+
+### 17.4 Determinism Guarantees
+
+| Property | Guarantee |
+|----------|-----------|
+| Same query + same state = same results | Yes |
+| Tiebreaking for equal scores | Lexicographic hash order (ascending) |
+| Parser is stateless | Yes |
+| Decidability | Every string terminates in bounded time |
+| ADD is idempotent | No (unique content address per call) |
+| SUPERSEDE is idempotent | No (returns SupersessionConflict) |
+
+---
+
+## 18. Capability Token Model
+
+### 18.1 Token Structure
+
+**Tier 0 (read-only) token:**
+```json
+{
+  "token_id": "uuid-v4",
+  "namespace": "authorized-namespace",
+  "user_id": "on-whose-behalf",
+  "tier": 0,
+  "allowed_ops": ["Recall", "Assemble", "Count", "Exists", "Explain",
+                   "History", "Describe", "Batch", "Coalesce"],
+  "issued_at": 1709337600000,
+  "expires_at": 1709337900000,
+  "max_uses": 1,
+  "allowed_grain_types": [],
+  "write_quota_remaining": 0,
+  "signature": "hmac-sha256-signature"
+}
+```
+
+**Tier 1 (evolve) token:**
+```json
+{
+  "token_id": "uuid-v4",
+  "namespace": "authorized-namespace",
+  "user_id": "on-whose-behalf",
+  "tier": 1,
+  "allowed_ops": ["Recall", "Assemble", "Count", "Exists", "Explain",
+                   "History", "Describe", "Batch", "Coalesce",
+                   "Add", "Supersede", "Revert"],
+  "issued_at": 1709337600000,
+  "expires_at": 1709337900000,
+  "max_uses": 1,
+  "allowed_grain_types": ["belief"],
+  "write_quota_remaining": 10,
+  "signature": "hmac-sha256-signature"
+}
+```
+
+### 18.2 Two-Phase Execution
+
+```
+1. LLM generates CAL string
+2. Agent harness -> prepare endpoint
+   -> Server authenticates, parses, validates, creates token
+   -> For Tier 1: shows what will be added/superseded/reverted
+   -> Returns {token, plan, tier, side_effects}
+3. Agent harness reviews plan (REQUIRED for Tier 1, RECOMMENDED for Tier 0)
+   -> Execute endpoint
+   -> Server verifies token, checks expiration/replay, executes, returns results
+```
+
+### 18.3 Namespace Enforcement
+
+The namespace is ALWAYS taken from the token, never from the query. Implementations MUST overwrite any namespace specified in the CAL string with the token's namespace.
+
+---
+
+## 19. Policy Integration
+
+### 19.1 CAL Inherits Sealed Policy
+
+CAL queries execute through the same read path as all other interfaces. No CAL syntax can weaken the active policy.
+
+| Policy Constraint | CAL Behavior |
+|---|---|
+| `encryption_required` | Transparent -- CAL reads decrypted grains via normal path |
+| `consent_level = Explicit` | Grains without consent silently excluded |
+| `processing_restriction` | Restricted users' data invisible in results |
+| `pii_detection` / `phi_detection` | PII/PHI-tagged fields subject to policy redaction |
+| `audit_required` | Every CAL query produces audit entry |
+
+### 19.2 GDPR Implications
+
+- **Art. 15 (Right of Access):** CAL enables DSAR via `RECALL WHERE user_id = "alice" | COUNT`
+- **Art. 16 (Right to Rectification):** CAL SUPERSEDE enables correction of inaccurate personal data.
+- **Art. 17 (Right to Erasure):** Excluded at grammar level. Erasure only via implementation-specific APIs.
+- **Art. 20 (Data Portability):** CAL can serve as query interface for exports.
+- **Art. 25 (By Design):** Grammar-level safety qualifies as "by design" protection.
+
+### 19.3 HIPAA Implications
+
+- **Minimum Necessary:** Under HIPAA policy, CAL SHOULD enforce stricter default LIMIT and require field projection for PHI-containing results.
+- **Audit:** CAL query audit entries MUST use pseudonymized user IDs and query hashes.
+
+### 19.4 EU AI Act Implications
+
+- **Transparency:** Results include `provenance_id` linking to immutable provenance chain.
+- **Explanations:** `WITH explanation` provides compliant explanations.
+- **Tier 1 Traceability:** Every SUPERSEDE/REVERT includes a mandatory REASON.
+
+---
+
+## 20. Threat Model
+
+### 20.1 Attack Vectors and Defenses
+
+| Attack | Severity | Defense |
+|--------|----------|---------|
+| **Prompt injection** | CRITICAL | Grammar-level exclusion + capability token scoping + query firewall |
+| **Query injection** | HIGH | Parameterized queries (`$param`) -- no string concat |
+| **Memory spam via ADD** | HIGH | Write quota (20/min); single-use tokens; mandatory REASON |
+| **Hallucinated ADD** | HIGH | Two-phase prepare/execute; mandatory REASON; REVERT enables correction |
+| **Supersede injection** | HIGH | Two-phase prepare/execute; write quotas; REVERT recovery |
+| **Supersede storm** | HIGH | Write quotas; per-token single-use; rate limiting |
+| **Resource exhaustion** | HIGH | Hard compiled limits, timeout enforcement |
+| **Cross-namespace disclosure** | CRITICAL | Token-bound namespace enforcement |
+| **Timing side-channel** | MEDIUM | Response jitter; identical error responses |
+| **Privilege escalation** | HIGH | Token tier checked before execution |
+| **Template injection** | MEDIUM | Closed variable set; no code execution; validated at definition time |
+| **Streaming resource exhaustion** | MEDIUM | Max concurrent streams (3); backpressure; stall timeout (30s) |
+
+### 20.2 Query Firewall
+
+Implementations SHOULD perform static analysis between parsing and execution:
+- Maximum query complexity score
+- Deny patterns
+- Mandatory namespace filter
+- Maximum Tier 1 operations per session
+
+### 20.3 Kill Switch
+
+Implementations MUST support disabling CAL at runtime:
+- **Master switch:** Disables all CAL operations (503).
+- **Tier 1 switch:** Disables only ADD/SUPERSEDE/REVERT (403 for evolve, reads continue).
+
+---
+
+## 21. Audit Trail
+
+Every CAL execution MUST produce an audit entry.
+
+**Tier 0 (Read):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `token_id` | string | Capability token correlation |
+| `query_hash` | string | SHA-256 of normalized CAL string |
+| `namespace` | string | Token's namespace |
+| `actor_id` | string | Pseudonymized (HMAC-SHA256) |
+| `agent_id` | string? | Which LLM generated this query |
+| `result_count` | integer | Number of grains returned |
+| `tier` | integer | 0 |
+| `duration_ms` | integer | Execution time |
+
+**Tier 1 (Evolve):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `token_id` | string | Capability token correlation |
+| `query_hash` | string | SHA-256 of normalized CAL string |
+| `namespace` | string | Token's namespace |
+| `actor_id` | string | Pseudonymized |
+| `agent_id` | string? | Which LLM generated this query |
+| `operation` | string | `"add"`, `"supersede"`, or `"revert"` |
+| `target_hash` | string? | Target grain's content address |
+| `new_hash` | string | Newly created grain's content address |
+| `reason` | string | Mandatory reason text |
+| `tier` | integer | 1 |
+| `duration_ms` | integer | Execution time |
+
+**Streaming audit fields (additional):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `stream_enabled` | boolean | Whether streaming was requested |
+| `stream_options` | array | Active stream options |
+| `events_emitted` | integer | Total events sent |
+| `cancelled` | boolean | Whether assembly was cancelled |
+| `cancel_reason` | string? | Cancellation reason |
+| `sources_failed` | integer | Number of failed sources |
+
+---
+
+## 22. Error Model
+
+### 22.1 Error Format
+
+Errors are stable across spec versions. Every error MUST include: code, message, and suggestion. Errors SHOULD include: position, expected alternatives, and example correction.
+
+```json
+{
+  "error": {
+    "code": "CAL-E003",
+    "message": "Unknown grain type \"fact\".",
+    "position": {"start": 7, "end": 11, "line": 1, "col": 8},
+    "suggestion": "Did you mean \"belief\"? (OMS renamed Fact -> Belief in v1.2)",
+    "example": "RECALL beliefs WHERE subject = \"alice\"",
+    "valid_values": ["belief","event","state","workflow","action","observation","goal","reasoning","consensus","consent"]
+  }
+}
+```
+
+### 22.2 Error Code Summary
+
+See [Appendix C](#appendix-c-error-code-registry) for the complete registry. Error codes are organized by category:
+
+| Range | Category | Count |
+|-------|----------|-------|
+| CAL-E001 -- CAL-E019 | Parse | 19 |
+| CAL-E020 -- CAL-E022 | Type | 3 |
+| CAL-E030 -- CAL-E031 | Execution | 2 |
+| CAL-E040 -- CAL-E052 | Evolve | 10 |
+| CAL-E060 -- CAL-E066 | Grain Type | 7 |
+| CAL-E070 -- CAL-E071 | i18n | 2 |
+| CAL-E075 -- CAL-E082 | Streaming | 8 |
+| CAL-E085 -- CAL-E096 | Template | 12 |
+| CAL-E100 | Version | 1 |
+
+### 22.3 Warning Codes
+
+| Code | Category | Description |
+|------|----------|-------------|
+| CAL-W001 | Warning | Unknown `mg:` relation (not in standard vocabulary) |
+| CAL-W002 | Warning | Domain field used without matching `profile:` tag |
+| CAL-W003 | Warning | Unknown domain prefix |
+| CAL-W004 | Warning | Unknown extension option (ignored) |
+| CAL-W005 | Warning | FORMAT auto-selected as `toon` due to budget pressure (>85% utilization estimate). Specify FORMAT explicitly to suppress. |
+
+---
+
+## 23. Compliance Checks
+
+CAL introduces compliance verification checks that implementations MUST validate:
+
+| Check | Regulation | Severity |
+|-------|-----------|----------|
+| `cal_grammar_safety` | All | Critical |
+| `cal_default_minimization` | GDPR Art.25, HIPAA | Critical |
+| `cal_audit_logging` | All | Critical |
+| `cal_authz_enforcement` | HIPAA, SOX | Critical |
+| `cal_no_policy_override` | All | Critical |
+| `cal_injection_prevention` | All | Critical |
+| `cal_tier1_audit` | All | Critical |
+| `cal_tier1_policy_gate` | All | Critical |
+| `cal_provenance_tracking` | EU AI Act | High |
+| `cal_ai_marking` | EU AI Act | High |
+| `cal_dsar_completeness` | GDPR Art.15 | High |
+| `cal_hipaa_minimum_necessary` | HIPAA | High |
+| `cal_phi_in_queries` | HIPAA | High |
+| `cal_rate_limiting` | All | High |
+| `cal_portability_format` | GDPR Art.20 | Medium |
+| `cal_consent_on_read` | GDPR Art.6, LGPD | Medium |
+
+---
+
+## 24. Conformance Levels
+
+### Level 1: Core (MUST implement)
+
+- `RECALL` with `WHERE`, `IN`, `LIMIT`, `ABOUT`, `RECENT`
+- `EXISTS`
+- Parameter binding (`$param`)
+- Hash literals (`sha256:...`)
+- Error codes CAL-E001 through CAL-E031
+- All safety invariants (section 2)
+- Policy enforcement, audit integration
+- Determinism guarantees (section 17.4)
+- `text/cal` wire format
+
+### Level 2: Extended (SHOULD implement)
+
+Everything in Core, plus:
+- Pipeline operators (`| SELECT`, `| ORDER BY`, `| LIMIT`, `| COUNT`, `| FIRST`, `| GROUP BY`)
+- Set operators (`UNION`, `INTERSECT`, `EXCEPT`)
+- Subqueries (`WHERE field IN (subquery | EXTRACTOR)`)
+- `EXPLAIN` mode
+- `HISTORY` statement (including AS OF and DIFF)
+- `DESCRIBE` statement (grain_types, fields, capabilities, server)
+- `BATCH` statement
+- `COALESCE` statement
+- `LET` bindings
+- All semantic shortcuts (SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN)
+- `ASSEMBLE` statement with BUDGET, PRIORITY, FORMAT
+- Advanced `WITH` options (diversity, score_breakdown, explanation, provenance, progressive_disclosure)
+- `AS` per-query format control
+- `application/json+cal` wire format (dual wire format)
+- Error suggestion system ("did you mean?")
+- Cross-lingual search
+- Grain-type-specific fields (section 6)
+- `mg:` relation category shortcuts (section 7)
+- Domain profile querying (section 12)
+- `THREAD` shorthand
+
+### Level 3: Evolve (MAY implement)
+
+Everything in Extended, plus:
+- `ADD` with grain type, `SET` clauses, and `REASON`
+- `SUPERSEDE` with `SET` clauses and `REASON`
+- `REVERT` with `REASON`
+- Tier 1 capability tokens with write quotas
+- Error codes CAL-E040 through CAL-E052
+- Two-phase prepare/execute with side-effect preview
+
+### Level 4: Full (MAY implement)
+
+Everything in Evolve, plus:
+- Streaming ASSEMBLE (`STREAM` clause, SSE transport, cancellation)
+- Custom FORMAT templates (`DEFINE TEMPLATE`, inline templates, named references)
+- Template inheritance from presets
+- Template validation (error codes CAL-E085 through CAL-E096)
+- Content Projection Model and `PROJECT` clause
+- `DESCRIBE grammar` (returns EBNF)
+- `DESCRIBE templates`
+- WebSocket transport for streaming
+
+Implementations MUST declare conformance:
+```json
+{"cal_conformance": "extended", "cal_version": "1.0"}
+```
+
+---
+
+## 25. Versioning and Evolution
+
+### 25.1 Semver for Specs
+
+- **Major (CAL/1 -> CAL/2):** Breaking changes to grammar or semantics. Extremely rare.
+- **Minor (e.g. 1.0 -> 1.1):** Additive only — new keywords, operators, or WITH options.
+- **Patch (e.g. 1.0.0 -> 1.0.1):** Clarifications only. No grammar changes.
+
+### 25.2 Extension Mechanism
+
+Implementation-specific hints via `WITH x_prefix_name(...)`:
+
+```sql
+RECALL WHERE query = "..." WITH x_hnsw_ef(200)
+```
+
+Rules:
+1. Extensions MUST use `x_` prefix
+2. Extensions MUST NOT change core query semantics
+3. Unknown extensions produce warning (not error)
+4. Extensions MUST NOT enable destructive operations
+
+---
+
+## 26. Interface Integration
+
+CAL is transport-agnostic. Implementations MAY expose CAL through any combination of interfaces:
+
+| Interface | Endpoint Pattern | Input | Output |
+|-----------|-----------------|-------|--------|
+| REST | `POST /memories/{id}/cal` | `{"query": "...", "params": {...}}` | Response Envelope |
+| REST | `POST /memories/{id}/cal/prepare` | `{"query": "...", "params": {...}}` | `{token, plan, tier}` |
+| REST | `POST /memories/{id}/cal/execute` | `{"token": "..."}` | Response |
+| REST (stream) | `POST /memories/{id}/cal` | `Accept: text/event-stream` | SSE stream |
+| gRPC | `CalQuery(CalRequest)` | query string + params | `CalResponse` |
+| MCP | Tool: `cal` | `{"query": "...", "params": {...}}` | JSON |
+| A2A | Skill: `memory_cal` | CAL in task input | Task artifact |
+| CLI | `<impl> cal "..."` | String or file | JSON or table |
+| WebSocket | `/memories/{id}/cal/ws` | JSON frames | JSON frames |
+
+All interfaces SHOULD support both Tier 0 and Tier 1 (when enabled). The two-phase prepare/execute flow is REQUIRED for Tier 1 and RECOMMENDED for Tier 0.
+
+---
+
+## 27. LLM System Prompt Template
+
+Implementations SHOULD provide this reference to LLMs generating CAL queries (~1200 tokens):
+
+```
+## CAL Quick Reference
+
+CAL is a non-destructive context assembly language for OMS memory databases.
+It can read, assemble, and evolve memories, but never delete them.
+
+### Read operations:
+  RECALL [MY] [type] [IN "ns"] [ABOUT "entity"] [WHERE conditions] [WITH options]
+    [| pipeline] [RECENT n] [SINCE "time"] [AS format]
+  ASSEMBLE name FOR "intent" FROM label:(RECALL ...), ...
+    BUDGET n tokens PRIORITY l1 > l2 FORMAT markdown [STREAM]
+  EXISTS sha256:hash
+  HISTORY WHERE subject = "s" AND relation = "r" [AS OF "date"]
+  HISTORY sha256:hash [DIFF sha256:other]
+  EXPLAIN <any statement>
+  DESCRIBE grain_types | fields | capabilities | server
+  BATCH { label: RECALL ..., label: RECALL ... }
+  COALESCE(RECALL ..., RECALL ...)
+
+### Evolve operations (when enabled):
+  ADD <type> SET subject = "s" SET relation = "r" SET object = "o" [SET ...] REASON "why"
+  SUPERSEDE sha256:hash SET field = value [SET ...] REASON "why"
+  REVERT sha256:hash REASON "why"
+
+### Types: beliefs, events, states, workflows, actions, observations, goals,
+           reasonings, consensuses, consents
+
+### WHERE conditions (combine with AND):
+  query = "search text"           -- semantic search
+  subject = "entity"              -- triple subject
+  relation = "predicate"          -- triple relation
+  relation IS PREFERENCE          -- category shortcut
+  object = "value"                -- triple object
+  user_id = "uid"                 -- user filter
+  hash = sha256:abcd...           -- exact lookup
+  time = "last 7 days"            -- natural language time
+  time BETWEEN epoch1 AND epoch2  -- epoch range
+  confidence >= 0.8               -- min confidence
+  tags INCLUDE ["tag1"]           -- required tags
+  type = "belief"                 -- grain type
+
+### Shortcuts: ABOUT, RECENT n, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN
+
+### Pipeline: | SELECT f1,f2 | ORDER BY field [ASC|DESC] | LIMIT n | COUNT
+             | FIRST | SUBJECTS | OBJECTS | HASHES | GROUP BY field
+             | PROJECT content(f1,f2), attr(f3,f4)
+
+### Parameters: Use $name for dynamic values
+
+### Streaming:
+  ASSEMBLE ... STREAM                          -- stream all events
+  ASSEMBLE ... STREAM { progress, chunks }     -- specific events
+
+### Custom templates:
+  FORMAT TEMPLATE name                         -- use named template
+  FORMAT TEMPLATE { ELEMENT { <{{grain.type}}>{{grain.content}}</{{grain.type}}> } }
+
+### Output formats:
+  sml (default structured): flat tag-based — <belief subject="alice" confidence="0.92">prefers dark mode</belief>
+  toon: CSV-tabular, ~40% fewer tokens — beliefs[3]{subject,content,confidence}:\nalice,prefers dark mode,0.95
+  markdown: human-readable prose
+  json: machine-readable structured data
+  text: minimal plain text
+  triples: subject-relation-object triples
+  -- Use AS toon on large RECALL sets; FORMAT toon on budget-constrained ASSEMBLE
+
+### Rules:
+- LIMIT is always enforced (default 20, max 1000)
+- CAL cannot delete, erase, forget, or destroy data.
+- REASON is mandatory for all evolve operations.
+- Use HISTORY to check current version before SUPERSEDE.
+```
+
+---
+
+## Appendix A: Complete EBNF Grammar
+
+The complete EBNF grammar is provided in section 4. This appendix restates it as a single unbroken production set for implementer convenience. The grammar in section 4 is the normative reference.
+
+Implementations seeking the EBNF as machine-readable text SHOULD support `DESCRIBE grammar` which returns the productions in EBNF notation.
+
+---
+
+## Appendix B: JSON Schema References
+
+CAL defines two JSON Schemas for the dual wire format:
+
+| Schema | URI | Purpose |
+|--------|-----|---------|
+| Request | `https://cal-spec.org/schema/v1/cal-request.schema.json` | Validates `application/json+cal` requests |
+| Response | `https://cal-spec.org/schema/v1/cal-response.schema.json` | Validates CAL responses |
+
+The schemas are published alongside this specification in `schemas/v1/`. Implementations MUST validate incoming `application/json+cal` against the request schema. The schemas use JSON Schema draft 2020-12.
+
+A collection of 50 example request/response pairs is provided in `schemas/v1/cal-examples.json` as a conformance test suite.
+
+---
+
+## Appendix C: Error Code Registry
+
+All error codes use the `CAL-E` prefix.
+
+### Parse Errors (CAL-E001 -- CAL-E019)
+
+| Code | Description |
+|------|-------------|
+| CAL-E001 | Query exceeds maximum length (8192 bytes) |
+| CAL-E002 | Unexpected token (includes expected list) |
+| CAL-E003 | Unknown grain type (includes "did you mean?") |
+| CAL-E004 | Unknown field name (includes suggestions) |
+| CAL-E005 | Unterminated string literal |
+| CAL-E006 | Invalid number |
+| CAL-E007 | Subquery nesting exceeds depth 3 |
+| CAL-E008 | Unbound parameter |
+| CAL-E009 | Duplicate parameter binding |
+| CAL-E010 | LIMIT exceeds maximum |
+| CAL-E011 | IN set too large |
+| CAL-E012 | Too many pipeline stages |
+| CAL-E013 | Too many set operands |
+| CAL-E014 | Empty query |
+| CAL-E015 | Invalid hash literal (must be sha256: + hex) |
+| CAL-E016 | REASON text exceeds maximum length |
+| CAL-E017 | Unknown evolve field in SET clause |
+| CAL-E018 | Missing REASON clause |
+| CAL-E019 | Missing SET clause (SUPERSEDE requires at least one) |
+
+### Type Errors (CAL-E020 -- CAL-E022)
+
+| Code | Description |
+|------|-------------|
+| CAL-E020 | Incompatible types in comparison |
+| CAL-E021 | Pipeline stage type mismatch |
+| CAL-E022 | SUBJECTS/OBJECTS requires belief-type input |
+
+### Execution Errors (CAL-E030 -- CAL-E031)
+
+| Code | Description |
+|------|-------------|
+| CAL-E030 | Grain budget exceeded |
+| CAL-E031 | Query timeout |
+
+### Evolve Errors (CAL-E040 -- CAL-E052)
+
+| Code | Description |
+|------|-------------|
+| CAL-E040 | SupersessionConflict -- target grain already superseded |
+| CAL-E041 | NoPreviousVersion -- REVERT target is the original grain |
+| CAL-E042 | GrainTypeNotEvolvable -- only Belief grains can be superseded |
+| CAL-E043 | WriteQuotaExceeded -- too many evolve operations |
+| CAL-E044 | Tier1NotEnabled -- requires Tier 1 capability |
+| CAL-E045 | NamespaceMismatch -- target grain in different namespace |
+| CAL-E046 | TargetNotFound -- target hash does not exist |
+| CAL-E050 | MissingRequiredField -- ADD requires subject, relation, object |
+| CAL-E051 | GrainTypeNotAddable -- only Belief, Observation, Goal can be created |
+| CAL-E052 | AddQuotaExceeded -- too many ADD operations |
+
+### Shortcut and Grain Type Errors (CAL-E060 -- CAL-E066)
+
+| Code | Description |
+|------|-------------|
+| CAL-E060 | AmbiguousShortcut / FieldNotOnGrainType |
+| CAL-E061 | Grain-type-specific field used without declaring grain type |
+| CAL-E062 | Invalid `action_phase` value |
+| CAL-E063 | Invalid `goal_state` value |
+| CAL-E064 | Invalid `consent_action` value |
+| CAL-E065 | Invalid `recall_priority` value |
+| CAL-E066 | Invalid `epistemic_status` value |
+
+### Internationalization Errors (CAL-E070 -- CAL-E071)
+
+| Code | Description |
+|------|-------------|
+| CAL-E070 | InvalidUTF8 -- query contains invalid UTF-8 sequences |
+| CAL-E071 | BidiOverrideRejected -- bidi override characters not allowed |
+
+### ASSEMBLE Errors (CAL-E075 -- CAL-E076)
+
+| Code | Description |
+|------|-------------|
+| CAL-E075 | ASSEMBLE timeout exceeded (10s) |
+| CAL-E076 | All ASSEMBLE sources failed |
+
+### Streaming Errors (CAL-E077 -- CAL-E082)
+
+| Code | Description |
+|------|-------------|
+| CAL-E077 | InvalidStreamOption -- unknown option in STREAM clause |
+| CAL-E078 | ChunkSizeOutOfRange -- chunk_size must be 20-1000 |
+| CAL-E079 | StreamNotSupported -- server does not support streaming |
+| CAL-E080 | GrainFormatError -- individual grain could not be formatted |
+| CAL-E081 | StreamReconnectExpired -- assembly completed before reconnect |
+| CAL-E082 | AssemblyCancelled -- assembly was cancelled |
+
+### Template Errors (CAL-E085 -- CAL-E096)
+
+| Code | Description |
+|------|-------------|
+| CAL-E085 | TemplateNotFound -- named template does not exist |
+| CAL-E086 | CannotExtendData -- templates cannot extend 'data' preset |
+| CAL-E087 | CannotExtendCustom -- templates can only extend presets |
+| CAL-E088 | DuplicateTemplateName -- template already exists |
+| CAL-E089 | TooManyTemplates -- namespace at 50-template limit |
+| CAL-E090 | UnknownTemplateVariable -- variable not in known set |
+| CAL-E091 | UnbalancedTemplateSection -- opening tag without closing |
+| CAL-E092 | TemplateTooLarge -- exceeds 4096 bytes |
+| CAL-E093 | TemplateNestingTooDeep -- conditional nesting exceeds 5 |
+| CAL-E094 | InvalidTemplateSyntax -- unrecognized Mustache syntax |
+| CAL-E095 | DuplicateSection -- same section defined twice |
+| CAL-E096 | ConflictingElementSections -- ELEMENT vs ELEMENT_SUMMARY conflict |
+
+### Version Errors (CAL-E100)
+
+| Code | Description |
+|------|-------------|
+| CAL-E100 | Unsupported CAL version |
+
+### Warning Codes (CAL-W001 -- CAL-W005)
+
+| Code | Description |
+|------|-------------|
+| CAL-W001 | Unknown `mg:` relation (not in standard vocabulary) |
+| CAL-W002 | Domain field used without matching profile tag |
+| CAL-W003 | Unknown domain prefix |
+| CAL-W004 | Unknown extension option (ignored) |
+| CAL-W005 | FORMAT auto-selected as `toon` due to budget pressure (>85% utilization estimate). Specify FORMAT explicitly to suppress. |
+
+---
+
+## Appendix D: Reserved Words
+
+The following words are reserved in CAL/1. They cannot be used as unquoted identifiers even if not yet functional. This list consolidates reserved words from all sources.
+
+### Active Keywords
+
+```
+RECALL, ASSEMBLE, WHERE, AND, OR, NOT, IN, BETWEEN, LIMIT, OFFSET,
+ORDER, BY, ASC, DESC, WITH, EXPLAIN, SCOPE,
+UNION, INTERSECT, EXCEPT,
+SELECT, COUNT, FIRST, GROUP, SUBJECTS, OBJECTS, HASHES, PROJECT,
+INCLUDE, EXCLUDE, IS, NULL, TRUE, FALSE,
+EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE,
+ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, AS,
+FOR, FROM, BUDGET, PRIORITY, FORMAT,
+LET, THREAD, DIFF,
+ADD, SUPERSEDE, REVERT, SET, REASON,
+STREAM, TEMPLATE, DEFINE, UNDEFINE, EXTENDS,
+HEADER, ELEMENT, ELEMENT_SUMMARY, ELEMENT_OMIT, SOURCE_BREAK, FOOTER,
+PREFERENCE, KNOWLEDGE, PERMISSION, INTERACTION, AGENCY, LIFECYCLE, OBSERVATION,
+CAL, OF
+```
+
+### Future-Reserved Words
+
+```
+FIND, RELATE, TIMELINE, TRACE, GRAPH, ANNOTATE,
+MATCHING, SIMILAR, NEAR, TAGGED, USER,
+VIA, DEPTH, TOP, UNTIL, LAST, HAVING,
+DIVERSITY, MMR, THRESHOLD, RERANK, PROVENANCE,
+SUPERSEDED, EXPLANATION, SCORE_BREAKDOWN,
+CONSISTENCY, EVENTUAL, BOUNDED, LINEARIZABLE,
+CACHE, PIN, UNPIN, MERGE, LANG,
+CHUNK, PAUSE, RESUME, CANCEL
+```
+
+---
+
+## Appendix E: Queryable Fields Reference
+
+### Common Fields (All Grain Types)
+
+| Field | Type | Operators | Sortable | Projectable | Groupable |
+|-------|------|-----------|----------|-------------|-----------|
+| `query` | String | `=` | No | No | No |
+| `subject` | String | `=`, `!=`, `IN` | Yes | Yes | Yes |
+| `relation` | String | `=`, `!=`, `IN`, `IS` | Yes | Yes | Yes |
+| `object` | String | `=`, `!=`, `IN` | Yes | Yes | Yes |
+| `user_id` | String | `=`, `!=` | No | Yes | Yes |
+| `namespace` | String | `=` | No | No | No |
+| `confidence` | Number | `=`, `!=`, `>=`, `<=`, `>`, `<` | Yes | Yes | No |
+| `importance` | Number | `=`, `!=`, `>=`, `<=`, `>`, `<` | Yes | Yes | No |
+| `score` | Number | `>=`, `>` | Yes | Yes | No |
+| `tags` | Array | `INCLUDE`, `EXCLUDE` | No | Yes | No |
+| `type` | GrainType | `=` | No | Yes | Yes |
+| `time` | Temporal | `=`, `BETWEEN` | Yes | Yes | No |
+| `hash` | Hash | `=` | No | Yes | No |
+| `contradicted` | Boolean | `=` | No | Yes | No |
+| `verification_status` | String | `=` | Yes | Yes | Yes |
+| `source_type` | String | `=` | Yes | Yes | Yes |
+| `recall_priority` | String | `=` | No | No | No |
+| `epistemic_status` | String | `=` | No | No | No |
+
+### Grain-Type-Specific Fields
+
+| Grain Type | Field | Type | Operators |
+|-----------|-------|------|-----------|
+| Event | `role` | String | `=`, `!=` |
+| Event | `session_id` | String | `=` |
+| Event | `parent_message_id` | String | `=` |
+| Event | `model_id` | String | `=`, `!=` |
+| Event | `content` | String | `=` |
+| State | `context` | String | `=`, `!=` |
+| State | `plan` | String | `=` |
+| Workflow | `trigger` | String | `=`, `!=` |
+| Workflow | `steps` | String | `=` |
+| Action | `tool_name` | String | `=`, `!=`, `IN` |
+| Action | `action_phase` | String | `=` |
+| Action | `is_error` | Boolean | `=` |
+| Action | `tool_call_id` | String | `=` |
+| Observation | `observer_id` | String | `=`, `!=` |
+| Observation | `observer_type` | String | `=`, `!=` |
+| Goal | `goal_state` | String | `=`, `!=` |
+| Goal | `assigned_agent` | String | `=`, `!=` |
+| Goal | `deadline` | Temporal | `=`, `BETWEEN` |
+| Goal | `depends_on` | String | `=`, `IN` |
+| Reasoning | `reasoning_type` | String | `=` |
+| Reasoning | `premises` | String | `=` |
+| Reasoning | `conclusion` | String | `=`, `!=` |
+| Consensus | `threshold` | Number | `=`, `>=`, `<=`, `>`, `<` |
+| Consensus | `agreement_count` | Number | `=`, `>=`, `<=`, `>`, `<` |
+| Consensus | `participating_observers` | Array | `INCLUDE` |
+| Consent | `consent_action` | String | `=` |
+| Consent | `purpose` | String | `=`, `!=` |
+| Consent | `grantor_did` | String | `=` |
+| Consent | `grantee_did` | String | `=` |
+| Consent | `scope` | String | `=` |
+| Consent | `expires_at` | Temporal | `=`, `BETWEEN` |
+
+### Domain-Prefixed Fields
+
+| Domain | Fields |
+|--------|--------|
+| `hc:` | `patient_id`, `encounter_id`, `provider_id`, `condition_code`, `phi_category` |
+| `legal:` | `case_id`, `jurisdiction`, `privilege_status`, `retention_category` |
+| `fin:` | `account_id`, `transaction_id`, `risk_category`, `compliance_flag` |
+| `rob:` | `device_id`, `coordinate_frame`, `safety_zone` |
+| `sci:` | `experiment_id`, `dataset_id`, `methodology`, `reproducibility_status` |
+| `con:` | `session_context`, `interaction_channel` |
+| `int:` | `source_system`, `correlation_id`, `sync_status` |
+
+---
+
+## Appendix F: Version History
+
+| Version | Date | Change |
+|---------|------|--------|
+| 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
+
+---
+
+**Document Status:** This is the CAL (Context Assembly Language) Specification v1.0. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.3 — see [SPECIFICATION.md](./SPECIFICATION.md).
+
+**Last Updated:** 2026-03-03
+**License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
+**Copyright:** Public Domain (CC0 1.0 Universal)

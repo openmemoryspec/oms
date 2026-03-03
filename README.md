@@ -70,8 +70,8 @@ OMS defines the wire format. Two companion specs build on it:
 
 | Spec | Repo | Description |
 |------|------|-------------|
-| **CAL** — Context Assembly Language | [openmemoryspec/cal](https://github.com/openmemoryspec/cal) | Non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. Extends the OMS Store Protocol with `RECALL`, `ASSEMBLE`, `ADD`, and `SUPERSEDE` statements. |
-| **SML** — Semantic Markup Language | (defined within CAL) | Flat, tag-based markup format for LLM context output. Tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …). Produced by CAL `ASSEMBLE` statements. |
+| **CAL** — Context Assembly Language | [`CAL.md`](./CAL.md) | Non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. Extends the OMS Store Protocol with `RECALL`, `ASSEMBLE`, `ADD`, and `SUPERSEDE` statements. |
+| **SML** — Semantic Markup Language | §10.4 of [`CAL.md`](./CAL.md) | Flat, tag-based markup format for LLM context output. Tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …). Produced by CAL `ASSEMBLE` statements. |
 
 ## Specification
 
@@ -126,7 +126,7 @@ The full specification is in [`SPECIFICATION.md`](./SPECIFICATION.md).
 
 **Out of scope:**
 - Storage layer implementation (filesystem, S3, database, IPFS)
-- Index layer queries and context assembly — see [CAL](https://github.com/openmemoryspec/cal)
+- Index layer queries and context assembly — see [CAL.md](./CAL.md)
 - Transport protocols (HTTP, MQTT, Kafka)
 - Encryption at rest
 - Agent-to-agent communication protocol

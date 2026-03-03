@@ -68,7 +68,7 @@ A memory grain is the atomic unit of agent knowledge—a single immutable fact, 
 
 The .mg container format is to autonomous systems what JSON is to APIs and .git objects are to version control: a universal, language-agnostic, self-describing interchange format. It is the foundational wire format of OMS.
 
-The companion **CAL (Context Assembly Language)** specification ([github.com/openmemoryspec/cal](https://github.com/openmemoryspec/cal)) defines the query and context-assembly layer that operates on OMS stores, including the **SML (Semantic Markup Language)** output format for LLM context consumption. See §1.5 for details.
+The companion **CAL (Context Assembly Language)** specification ([CAL.md](./CAL.md)) defines the query and context-assembly layer that operates on OMS stores, including the **SML (Semantic Markup Language)** output format for LLM context consumption. See §1.5 for details.
 
 ---
 
@@ -138,9 +138,9 @@ OMS addresses this gap by defining a universal standard for knowledge interchang
 
 ### 1.5 Companion Specifications
 
-OMS defines the wire format and grain semantics. Two companion specifications build on top of it:
+OMS defines the wire format and grain semantics. Two companion specifications are part of the OMS v1.3 release and are included in this repository:
 
-**CAL — Context Assembly Language** ([github.com/openmemoryspec/cal](https://github.com/openmemoryspec/cal))
+**CAL — Context Assembly Language** ([CAL.md](./CAL.md))
 
 CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. It answers the question: *"what should be in the agent's context window right now?"* Key properties:
 
@@ -2799,7 +2799,7 @@ When Agent A transfers control of a conversation to Agent B, the handoff is reco
 
 ### 28.8 CAL and SML — Companion Query and Markup Languages
 
-The query conventions in this section (§28.1–§28.7) define OMS store operations and response envelopes at the structural level. The **Context Assembly Language (CAL)** ([github.com/openmemoryspec/cal](https://github.com/openmemoryspec/cal)) is the companion specification that provides a formal, deterministic syntax for invoking these operations from an agent or LLM.
+The query conventions in this section (§28.1–§28.7) define OMS store operations and response envelopes at the structural level. The **Context Assembly Language (CAL)** ([CAL.md](./CAL.md)) is the companion specification that provides a formal, deterministic syntax for invoking these operations from an agent or LLM.
 
 **Relationship to §28.4 Store Protocol:**
 
