@@ -20,6 +20,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 - **§27.7 Consensus Grain Usage for Action Definition Validation** — documented usage pattern for recording multi-source agreement on Action definition grains via the Consensus grain type.
 - **Updated §27.1 tool definition example** to include `output_schema` field.
 - **Updated Anthropic API alignment table** in §27.1 to note `output_schema` has no Anthropic equivalent.
+- **`CAL.md` — Context Assembly Language v1.0** bundled into this repository as part of OMS v1.3. CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS stores. Includes the **SML (Semantic Markup Language)** output format (§10.4 of `CAL.md`). OMS spec gains §1.5 (Companion Specifications) and §28.8 (CAL/SML store operation mapping).
 
 ### Changed
 
@@ -32,7 +33,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 - **§27.6 polling trigger example** — added missing `int:path_params` to align with A.7 normative rule requiring path template parameters to match `int:path_params` entries.
 - **§27.6 `observation_mode` mapping** — clarified that `"trigger:listener"` uses `"continuous"` (same as webhook).
 - **§6.1 `category` field** — fixed stale cross-reference from "§27 Category Registry" to "§27 Grain Type Field Specifications" (renamed in v1.2).
-- **CAL and SML bundled into this repository** — `CAL.md` (Context Assembly Language v1.0) is now part of the OMS v1.3 release. SML (Semantic Markup Language) is defined within §10.4 of `CAL.md`. References updated from `github.com/openmemoryspec/cal` to relative links. OMS spec gains §1.5 (Companion Specifications) and §28.8 (CAL/SML store operation mapping).
 
 ---
 

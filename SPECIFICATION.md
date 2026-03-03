@@ -68,7 +68,7 @@ A memory grain is the atomic unit of agent knowledge—a single immutable fact, 
 
 The .mg container format is to autonomous systems what JSON is to APIs and .git objects are to version control: a universal, language-agnostic, self-describing interchange format. It is the foundational wire format of OMS.
 
-The companion **CAL (Context Assembly Language)** specification ([CAL.md](./CAL.md)) defines the query and context-assembly layer that operates on OMS stores, including the **SML (Semantic Markup Language)** output format for LLM context consumption. See §1.5 for details.
+**CAL (Context Assembly Language)** ([CAL.md](./CAL.md)) and **SML (Semantic Markup Language)** are part of OMS v1.3. CAL defines the query and context-assembly layer that operates on OMS stores; SML is CAL's default output format for LLM context consumption. See §1.5 for details.
 
 ---
 
@@ -2808,10 +2808,11 @@ CAL extends the store operations defined in §28.4 with a structured query langu
 | §28.4 store operation | CAL statement |
 |---|---|
 | `query` + `search` | `RECALL <type> WHERE … LIMIT …` |
-| `put` (new grain) | `ADD <type> { … }` |
-| `supersede` | `SUPERSEDE <address> WITH { … }` |
-| `get_batch` + compose | `ASSEMBLE … FROM … BUDGET <n> TOKENS` |
+| `put` (new grain) | `ADD <type> SET field = value … REASON "…"` |
+| `supersede` | `SUPERSEDE <hash> SET field = value … REASON "…"` |
+| `query`/`search` + `get_batch` + compose | `ASSEMBLE … FROM … BUDGET <n> TOKENS` |
 | introspection | `DESCRIBE <type>` |
+| `delete` (compliance erasure) | no CAL equivalent — structurally excluded |
 
 **SML output format:**
 
