@@ -1,7 +1,7 @@
 # Open Memory Specification (OMS)
 ## Memory Grain (.mg) Container Definition
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** Standards Track
 **Category:** Data Formats
 **Date:** February 2026
@@ -68,6 +68,8 @@ A memory grain is the atomic unit of agent knowledge—a single immutable fact, 
 
 The .mg container format is to autonomous systems what JSON is to APIs and .git objects are to version control: a universal, language-agnostic, self-describing interchange format. It is the foundational wire format of OMS.
 
+**CAL (Context Assembly Language)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) and **SML (Semantic Markup Language)** ([SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md)) are part of OMS v1.3. CAL defines the query and context-assembly layer that operates on OMS stores; SML is CAL's default output format for LLM context consumption. See §1.5 for details.
+
 ---
 
 ## 1. Introduction
@@ -128,11 +130,29 @@ OMS addresses this gap by defining a universal standard for knowledge interchang
 
 **Out of scope:**
 - Storage layer implementation (filesystem, S3, database, IPFS)
-- Index layer queries and optimization
+- Index layer queries and optimization — see CAL (§1.5)
 - Policy engines and compliance rule evaluation
 - Transport protocols (HTTP, MQTT, Kafka)
 - Encryption at rest (applications of per-grain encryption are external to this spec)
 - Agent-to-agent communication protocol (which uses .mg format)
+
+### 1.5 Companion Specifications
+
+OMS defines the wire format and grain semantics. Two companion specifications are part of the OMS v1.3 release and are included in this repository:
+
+**CAL — Context Assembly Language** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md))
+
+CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. It answers the question: *"what should be in the agent's context window right now?"* Key properties:
+
+- Operates on all 10 OMS grain types (Belief, Event, State, Workflow, Action, Observation, Goal, Reasoning, Consensus, Consent)
+- Extends the OMS Store Protocol (§28.4) with a formal, structured query syntax
+- `ASSEMBLE` statements compose context from multiple grain sources within a token budget
+- Append-only: CAL writes create new grains via `put`; the language cannot delete or modify existing grains — this is enforced at the grammar level
+- Dual wire format: human-readable `text/cal` and machine-readable `application/json+cal` are bijectively equivalent
+
+**SML — Semantic Markup Language** ([SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md))
+
+SML is a flat, tag-based markup format optimized for LLM context consumption. It is not XML. Tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …); attributes carry lightweight decision metadata; text content is natural language. SML is the default output format for CAL `ASSEMBLE` statements and is designed to be consumed directly by an LLM without an XML processor.
 
 ---
 
@@ -427,7 +447,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `supersession_justification` | `sj` | string | Required on superseding grain when original has `mode: "soft_locked"` |
 | `supersession_auth` | `sa` | array | COSE signatures authorizing supersession for `mode: "quorum"` |
 | `owner` | `own` | map | LegalEntity map (§12.5.1) — legal entity with rights and liabilities over the agent |
-| `category` | `cat` | uint8 | Routing category within the grain type — see §27 Category Registry |
+| `category` | `cat` | uint8 | Routing category within the grain type — see §27 Grain Type Field Specifications |
 | `run_id` | `rid` | string | Session or run identifier — scopes grain to a specific agent execution. Distinct from `user_id` (data subject) and `namespace` (logical partition). |
 | `role` | `role` | string | Message role for Event grains — open enum, standard values: `"user"`, `"assistant"`, `"system"`, `"tool"` |
 | `access_count` | `ac` | int | Number of times this grain has been retrieved — updated by the store on reads, not by the writer. Enables recency/frequency scoring. |
@@ -507,6 +527,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `parent_task_id` | `ptid` | string | Content address of parent task grain |
 | `tool_description` | `tdesc` | string | Human-readable description of the tool (definition phase) |
 | `input_schema` | `isch` | map | JSON Schema for tool inputs; mirrors Anthropic `input_schema` / MCP `inputSchema` (definition phase) |
+| `output_schema` | `osch` | map | JSON Schema (draft-07 compatible) describing the action's return value (definition phase) |
 | `strict` | `strict` | bool | If `true`, model guarantees strict JSON Schema conformance for `input` (definition phase) |
 
 ### 6.6 Observation-Specific Fields
@@ -2331,6 +2352,7 @@ The `action_phase` field acts as a discriminator for async vs. synchronous tool 
 | `tool_name` | REQUIRED | REQUIRED | omit | REQUIRED |
 | `tool_description` | REQUIRED | omit | omit | omit |
 | `input_schema` | REQUIRED | omit | omit | omit |
+| `output_schema` | optional | omit | omit | omit |
 | `strict` | optional | omit | omit | omit |
 | `tool_type` | optional | optional | omit | optional |
 | `tool_version` | optional | optional | omit | optional |
@@ -2370,6 +2392,15 @@ The `action_phase` field acts as a discriminator for async vs. synchronous tool 
       "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
     },
     "required": ["location"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "temperature": {"type": "number"},
+      "unit": {"type": "string"},
+      "description": {"type": "string"},
+      "humidity": {"type": "number"}
+    }
   },
   "strict": true,
   "tool_type": "client",
@@ -2416,6 +2447,7 @@ The `action_phase` field acts as a discriminator for async vs. synchronous tool 
 | `tool.description` | `tool_description` |
 | `tool.input_schema` | `input_schema` |
 | `tool.strict` | `strict` |
+| (no Anthropic equivalent) | `output_schema` |
 | `tool_use.id` | `tool_call_id` |
 | `tool_use.input` | `input` |
 | `tool_result.content` | `content` |
@@ -2481,6 +2513,145 @@ Scientific and legal workflows cite external artifacts outside the OMS hash spac
 | `citation_role` | string | OPTIONAL | `"supports"`, `"refutes"`, `"extends"`, `"replicates"`, `"uses_data"`, `"uses_software"` |
 
 The `derived_from` field SHOULD accept both OMS content addresses and external citation objects.
+
+### 27.6 Trigger Definitions via Observation Grains
+
+Triggers observe external systems for changes (new events, incoming webhooks, scheduled intervals). This maps naturally to the Observation grain (type 0x06) — triggers are observers. No new grain type is required; existing Observation fields accommodate trigger definitions through the following convention.
+
+**Field mapping for triggers:**
+
+| Observation Field | Trigger Usage |
+|---|---|
+| `observer_id` | Connector name (e.g., `"github"`, `"stripe"`) |
+| `observer_type` | Trigger mechanism: `"trigger:polling"`, `"trigger:webhook"`, `"trigger:schedule"`, `"trigger:listener"` |
+| `observation_mode` | `"periodic"` (polling), `"continuous"` (webhook/listener), `"scheduled"` (cron) |
+| `observation_scope` | What is being watched (e.g., `"repos/{owner}/{repo}/issues"`) |
+| `context` | Trigger-specific configuration using `int:` prefixed fields from the Integration profile (§A.7) |
+
+Implementations MAY index Observation grains whose `observer_type` starts with `"trigger:"` to provide trigger catalog queries.
+
+**Example — Polling trigger:**
+
+```json
+{
+  "type": "observation",
+  "observer_id": "github",
+  "observer_type": "trigger:polling",
+  "observation_mode": "periodic",
+  "observation_scope": "repos/{owner}/{repo}/issues",
+  "structural_tags": ["profile:integration"],
+  "namespace": "axtion:connectors:github",
+  "context": {
+    "int:http_method": "GET",
+    "int:http_path": "/repos/{owner}/{repo}/issues",
+    "int:path_params": ["owner", "repo"],
+    "int:poll_interval_secs": 300,
+    "int:cursor_field": "since",
+    "int:cursor_type": "timestamp",
+    "int:connector": "github",
+    "int:config_schema": {
+      "type": "object",
+      "properties": {
+        "owner": {"type": "string"},
+        "repo": {"type": "string"},
+        "labels": {"type": "string"}
+      },
+      "required": ["owner", "repo"]
+    },
+    "int:event_schema": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "title": {"type": "string"},
+        "state": {"type": "string"}
+      }
+    }
+  },
+  "created_at": 1740700000000
+}
+```
+
+**Example — Webhook trigger:**
+
+```json
+{
+  "type": "observation",
+  "observer_id": "stripe",
+  "observer_type": "trigger:webhook",
+  "observation_mode": "continuous",
+  "observation_scope": "payment_intent.succeeded",
+  "structural_tags": ["profile:integration"],
+  "namespace": "axtion:connectors:stripe",
+  "context": {
+    "int:webhook_path": "/webhooks/stripe/{token}",
+    "int:webhook_secret_header": "Stripe-Signature",
+    "int:connector": "stripe",
+    "int:event_schema": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "amount": {"type": "integer"},
+        "currency": {"type": "string"}
+      }
+    }
+  },
+  "created_at": 1740700000000
+}
+```
+
+**Example — Scheduled trigger:**
+
+```json
+{
+  "type": "observation",
+  "observer_id": "scheduler",
+  "observer_type": "trigger:schedule",
+  "observation_mode": "scheduled",
+  "observation_scope": "daily-report",
+  "structural_tags": ["profile:integration"],
+  "context": {
+    "int:cron_expression": "0 9 * * MON-FRI",
+    "int:timezone": "America/New_York",
+    "int:connector": "scheduler"
+  },
+  "created_at": 1740700000000
+}
+```
+
+### 27.7 Consensus Grain Usage for Action Definition Validation
+
+When multiple independent sources produce or validate the same Action definition grain, a Consensus grain (type 0x09) records the agreement. This pattern is useful for integration platforms where definitions may be synthesized by LLMs, parsed from OpenAPI specs, validated against reference data, or refined by execution feedback analysis.
+
+**Semantics:**
+- `agreed_content` is the content address of the Action definition grain that achieved consensus.
+- Each entry in `participating_observers` is a DID identifying a validation source.
+- `dissent_grains` link to alternative definitions that did not achieve consensus.
+- Consensus achievement (`agreement_count >= threshold`) serves as a confidence signal for tool catalog quality.
+
+**Example — Multi-source validation consensus:**
+
+```json
+{
+  "type": "consensus",
+  "participating_observers": [
+    "did:web:example.com:agents:spec-parser",
+    "did:web:example.com:agents:llm-synthesizer",
+    "did:web:example.com:agents:reference-validator",
+    "did:web:example.com:agents:execution-evaluator"
+  ],
+  "threshold": 2,
+  "agreement_count": 3,
+  "dissent_count": 1,
+  "agreed_content": "<content-address-of-validated-definition-grain>",
+  "dissent_grains": ["<content-address-of-alternative-definition>"],
+  "structural_tags": ["consensus:action-definition"],
+  "namespace": "axtion:connectors:github",
+  "related_to": [
+    {"hash": "<definition-grain-hash>", "relation_type": "supports", "weight": 1.0}
+  ],
+  "created_at": 1740700000000
+}
+```
 
 ---
 
@@ -2626,6 +2797,27 @@ When Agent A transfers control of a conversation to Agent B, the handoff is reco
 3. Agent B ingests the referenced grains, validates the delegation scope, and continues with a new `run_id` but the same `session_id`.
 4. When Agent B completes its task, it writes a Goal grain with `goal_state: "satisfied"` linked via `derived_from` to the delegation grain, and control returns to the agent specified in `return_to`.
 
+### 28.8 CAL and SML — Companion Query and Markup Languages
+
+The query conventions in this section (§28.1–§28.7) define OMS store operations and response envelopes at the structural level. The **Context Assembly Language (CAL)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) is the companion specification that provides a formal, deterministic syntax for invoking these operations from an agent or LLM.
+
+**Relationship to §28.4 Store Protocol:**
+
+CAL extends the store operations defined in §28.4 with a structured query language. Where §28.4 defines `query`, `search`, `get`, `put`, and `supersede` as abstract operations, CAL provides the syntax for expressing them safely — with built-in token-budget awareness, multi-source composition, and a type system tied to OMS grain types.
+
+| §28.4 store operation | CAL statement |
+|---|---|
+| `query` + `search` | `RECALL <type> WHERE … LIMIT …` |
+| `put` (new grain) | `ADD <type> SET field = value … REASON "…"` |
+| `supersede` | `SUPERSEDE <hash> SET field = value … REASON "…"` |
+| `query`/`search` + `get_batch` + compose | `ASSEMBLE … FROM … BUDGET <n> TOKENS` |
+| introspection | `DESCRIBE <type>` |
+| `delete` (compliance erasure) | no CAL equivalent — structurally excluded |
+
+**SML output format:**
+
+CAL `ASSEMBLE` statements produce **SML (Semantic Markup Language)** output by default. SML is a flat, tag-based markup format optimized for LLM consumption: tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …), attributes carry lightweight metadata, and text content is natural language. See the [SML specification](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md) for the full format definition, structural rules, and progressive disclosure model. Implementations that expose a query layer SHOULD support CAL and produce SML output for agent context assembly.
+
 ---
 
 ## Appendix A: Domain Profile Registry
@@ -2767,6 +2959,95 @@ Applies to grains produced in consumer-facing agent contexts — personal assist
 | `con:ccpa_opted_out` | boolean | no | User has exercised CCPA opt-out of sale; MUST NOT be used as a processing basis — use `processing_basis` field instead |
 
 **Normative:** Grains with `"profile:consumer"` that include `user_id` or any direct identifier MUST set `processing_basis` to a lawful basis under GDPR Art. 6 / CCPA § 1798.100 before cross-system transfer. Grains with `con:ccpa_opted_out: true` MUST NOT be included in data sale or data broker transfers.
+
+### A.7 Integration Profile (`int:`)
+
+**Tag:** `"profile:integration"` | **Namespace prefix:** `int:`
+
+Applies to grains that represent REST API connectors, tool catalog entries, webhook definitions, or integration platform action registries. Integration profile fields are stored in the grain's `context` map (compact key: `ctx`), following the same pattern as other domain profiles.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `int:base_url` | string | no | API base URL (e.g., `"https://api.github.com"`) |
+| `int:http_method` | string | no | HTTP method: `"GET"`, `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"` |
+| `int:http_path` | string | no | URL path template with `{param}` placeholders (e.g., `"/repos/{owner}/{repo}/issues"`) |
+| `int:path_params` | string[] | no | Parameter names extracted from path template |
+| `int:query_params` | string[] | no | Query parameter names |
+| `int:body_params` | string[] | no | Body parameter names (for POST/PUT/PATCH) |
+| `int:response_mapping` | string | no | JQ-compatible expression for response transformation (e.g., `".data.items"`) |
+| `int:auth_type` | string | no | Auth mechanism: `"api_key"`, `"api_key:bearer"`, `"api_key:header"`, `"oauth2"`, `"basic"`, `"jwt"`, `"none"`. Open enum — implementations MAY define additional values (e.g., `"aws_sigv4"`, `"mtls"`) |
+| `int:auth_scopes` | string[] | no | Required OAuth scopes (e.g., `["repo", "read:org"]`) |
+| `int:read_only` | boolean | no | `true` if action does not mutate external state |
+| `int:connector` | string | no | Parent connector slug (e.g., `"github"`, `"stripe"`) |
+| `int:docs_url` | string | no | Documentation URL for this action or connector |
+| `int:rate_limit` | integer | no | Advisory maximum requests per minute; enforcement is an implementation concern |
+| `int:category` | string | no | Connector category (e.g., `"dev-tools"`, `"crm"`, `"communication"`) |
+| `int:sunset_date` | string | no | ISO 8601 date when this action will be removed |
+| `int:content_type` | string | no | Request content type if non-default (e.g., `"application/x-www-form-urlencoded"`) |
+
+**Trigger-specific fields** (used in Observation grains with `observer_type` starting with `"trigger:"`; see §27.6):
+
+| Field | Type | Used By | Description |
+|---|---|---|---|
+| `int:poll_interval_secs` | integer | polling | Seconds between polls |
+| `int:cursor_field` | string | polling | Field name for incremental fetching (e.g., `"since"`, `"last_id"`) |
+| `int:cursor_type` | string | polling | Cursor type: `"timestamp"`, `"id"`, `"etag"` |
+| `int:webhook_path` | string | webhook | Inbound webhook receiver path |
+| `int:webhook_secret_header` | string | webhook | Header containing HMAC signature |
+| `int:cron_expression` | string | schedule | Cron expression (e.g., `"0 9 * * MON-FRI"`) |
+| `int:timezone` | string | schedule | IANA timezone (e.g., `"America/New_York"`) |
+| `int:config_schema` | map | all | JSON Schema for trigger configuration |
+| `int:event_schema` | map | all | JSON Schema for emitted events |
+
+**Normative:**
+- Grains with `"profile:integration"` SHOULD include `int:connector` and `int:auth_type`.
+- `int:http_path` parameters MUST match entries in `int:path_params`.
+- `int:response_mapping` MUST be a valid JQ expression if present.
+- `int:rate_limit` is advisory only — enforcement is an implementation concern.
+
+**Example — Action definition with integration profile:**
+
+```json
+{
+  "type": "action",
+  "action_phase": "definition",
+  "tool_name": "github:create-issue",
+  "tool_description": "Create a new issue in a GitHub repository",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "owner": {"type": "string"},
+      "repo": {"type": "string"},
+      "title": {"type": "string"},
+      "body": {"type": "string"},
+      "labels": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["owner", "repo", "title"]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "id": {"type": "integer"},
+      "number": {"type": "integer"},
+      "html_url": {"type": "string"}
+    }
+  },
+  "structural_tags": ["profile:integration"],
+  "context": {
+    "int:base_url": "https://api.github.com",
+    "int:http_method": "POST",
+    "int:http_path": "/repos/{owner}/{repo}/issues",
+    "int:path_params": ["owner", "repo"],
+    "int:body_params": ["title", "body", "labels"],
+    "int:auth_type": "api_key:bearer",
+    "int:read_only": false,
+    "int:connector": "github",
+    "int:category": "dev-tools"
+  },
+  "namespace": "axtion:connectors:github",
+  "created_at": 1740700000000
+}
+```
 
 ---
 
@@ -2921,6 +3202,7 @@ footer        = 32OCTET  ; SHA-256 checksum
   "ptid": "parent_task_id",
   "tdesc": "tool_description",
   "isch": "input_schema",
+  "osch": "output_schema",
   "strict": "strict"
 }
 ```
@@ -3008,6 +3290,38 @@ footer        = 32OCTET  ; SHA-256 checksum
   "h": "hash",
   "rl": "relation_type",
   "w": "weight"
+}
+```
+
+**Integration Profile Fields (stored in `context` map):**
+
+```json
+{
+  "ib": "int:base_url",
+  "ihm": "int:http_method",
+  "ihp": "int:http_path",
+  "ipp": "int:path_params",
+  "iqp": "int:query_params",
+  "ibp": "int:body_params",
+  "irm": "int:response_mapping",
+  "iat": "int:auth_type",
+  "ias": "int:auth_scopes",
+  "iro": "int:read_only",
+  "ic": "int:connector",
+  "idu": "int:docs_url",
+  "irl": "int:rate_limit",
+  "icat": "int:category",
+  "isd": "int:sunset_date",
+  "ict": "int:content_type",
+  "ipis": "int:poll_interval_secs",
+  "icf": "int:cursor_field",
+  "icft": "int:cursor_type",
+  "iwp": "int:webhook_path",
+  "iwsh": "int:webhook_secret_header",
+  "icron": "int:cron_expression",
+  "itz": "int:timezone",
+  "icfg": "int:config_schema",
+  "ievt": "int:event_schema"
 }
 ```
 
@@ -3137,7 +3451,7 @@ content_address = sha256(blob).hex()
 
 ---
 
-**Document Status:** This is a v1.2 revision of the .mg format specification. This revision introduces the cognitive grain type model (Belief, Event, State, Workflow, Action, Observation, Goal, Reasoning, Consensus, Consent), reduces the fixed header from 10 to 9 bytes by removing the Category byte, and adds domain profile extensions. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
+**Document Status:** This is a v1.3 revision of the .mg format specification. This revision adds `output_schema` to the Action grain definition phase, introduces the Integration domain profile (`profile:integration`) for REST API connectors and tool catalogs, documents trigger definition conventions via Observation grains, and documents Consensus grain usage patterns for multi-source action definition validation. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
-**Last Updated:** 2026-02-23
+**Last Updated:** 2026-03-03
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
