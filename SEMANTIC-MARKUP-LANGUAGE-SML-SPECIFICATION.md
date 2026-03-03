@@ -1,6 +1,6 @@
 # SML (Semantic Markup Language) Specification v1.0
 
-**Status:** Draft | **Date:** 2026-03-03 | **Version:** 1.0.0 | **Classification:** Experimental
+**Status:** Standards Track | **Date:** 2026-03-03 | **Version:** 1.0 | **Classification:** Experimental
 **Part of:** [Open Memory Specification (OMS) v1.3](./SPECIFICATION.md)
 
 ---
