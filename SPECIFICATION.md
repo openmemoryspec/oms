@@ -200,7 +200,7 @@ Hexadecimal values are lowercase. Byte sequences are represented in hex with spa
 | 0x01 | **Belief** | Structured belief — (subject, relation, object) triple with confidence and source |
 | 0x02 | **Event** | Timestamped occurrence — message, interaction, or behavioral event |
 | 0x03 | **State** | Agent state snapshot — portable save point |
-| 0x04 | **Workflow** | Learned action sequence — procedural memory |
+| 0x04 | **Workflow** | Directed graph of procedural steps — plans, pipelines, processes |
 | 0x05 | **Action** | Tool invocation or code execution |
 | 0x06 | **Observation** | Raw sensory or cognitive input |
 | 0x07 | **Goal** | Objective with lifecycle semantics |
@@ -469,6 +469,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `invalidation_initiator` | `iinit` | string | DID of the party initiating the invalidation. |
 | `retention_policy` | `rpol` | map | Minimum retention requirements: `{minimum_retention_years: int, regulation: string, deletion_requires: string}`. Distinct from `invalidation_policy` (which controls supersession). |
 | `recall_priority` | `rpri` | string | Retrieval priority hint: `"hot"`, `"warm"`, `"cold"`. Guides index layer storage tier selection. |
+| `embedding_text` | `et` | string | Source text for vector embedding and full-text indexing. When present, implementations SHOULD use this value instead of the grain's default per-type text representation for embedding generation and search indexing. Complements `embedding_refs` (which records generated vectors) by specifying the input text. Implementations MAY impose a size limit (RECOMMENDED: 8192 bytes). |
 
 > **Note — `source_type` for Observation grains:** Use `"sensor"` when `observer_type` is a physical instrument; `"agent_inferred"` when `observer_type` is a cognitive AI observer (`"llm"`, `"reflector"`, `"classifier"`, `"detector"`); `"user_explicit"` for human observers.
 
@@ -497,10 +498,22 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 
 ### 6.4 Workflow-Specific Fields
 
+| Full Name | Short Key | Type | Notes |
+|-----------|-----------|------|-------|
+| `trigger` | `trigger` | string | Activation condition |
+| `nodes` | `nodes` | array[string] | Graph node IDs/labels |
+| `edges` | `edges` | array[map] | Directed edges (see §8.4 edge schema) |
+| `bindings` | `bind` | map[string→string] | Node ID → Action definition grain hash |
+| `retries` | `retries` | map[string→int] | Node ID → max repeat count |
+
+**Edge nested field compaction:**
+
 | Full Name | Short Key | Type |
 |-----------|-----------|------|
-| `steps` | `steps` | array[string] |
-| `trigger` | `trigger` | string |
+| `src` | `src` | string |
+| `dst` | `dst` | string |
+| `cond` | `cond` | string |
+| `max_cycles` | `mxc` | int |
 
 ### 6.5 Action-Specific Fields
 
@@ -729,7 +742,7 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:infers` | Reasoning | Derived conclusion from prior grains |
 | `mg:agrees_with` | Consensus | Multi-agent threshold agreement |
 | `mg:state_at` | State | Agent state snapshot |
-| `mg:requires_steps` | Workflow | Learned action sequence |
+| `mg:has_graph` | Workflow | Directed graph of procedural steps |
 | `mg:intends` | Goal | Agent objective |
 | `mg:permits` | Consent | User grants agent right to retain or act |
 | `mg:revokes` | Consent | User revokes prior consent |
@@ -784,15 +797,116 @@ An agent state snapshot — the portable save point at a moment in time.
 
 ### 8.4 Workflow (type = 0x04)
 
-Learned action sequence — procedural memory for recurring tasks.
+Directed graph of procedural steps — plans, pipelines, and multi-path processes.
 
 **Required fields:**
 - `type` = "workflow"
-- `steps` (non-empty array[string]) — ordered action steps
-- `trigger` (non-empty string) — condition that activates this workflow
+- `nodes` (non-empty array[string]) — graph node identifiers. Each string serves as both ID and human-readable label. Must be unique within the grain.
 - `created_at` (int64, epoch ms)
 
-**Optional fields:** All common fields.
+**Optional fields:**
+- `trigger` (string) — condition that activates this workflow
+- `edges` (array[map]) — directed edges between nodes (see edge schema below). When absent, nodes are unconnected.
+- `bindings` (map[string→string]) — maps node IDs to Action definition grain hashes (`action_phase: "definition"`). Unbound nodes are resolved by convention (tool name match) or treated as abstract steps.
+- `retries` (map[string→int]) — maps node IDs to maximum repeat count on failure. Absent means no retry.
+- All common fields.
+
+**Edge schema** (each element of `edges`):
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `src` | string | yes | ID of the source node (must exist in `nodes`) |
+| `dst` | string | yes | ID of the target node (must exist in `nodes`) |
+| `cond` | string | no | Opaque condition string; absent means unconditional |
+| `max_cycles` | int | no | Maximum traversal count for back-edges; absent means unlimited |
+
+**Structural semantics** (inferred from graph topology, not declared):
+- A node with multiple outgoing unconditional edges implies **parallel fan-out** (fork).
+- A node that is the target of multiple edges implies an **AND-join** (all predecessors must complete).
+- A node with multiple outgoing conditional edges (`cond` present) implies a **decision point**.
+- A node with no outgoing edges is a **terminal node**.
+- The **entry point** is the first element of `nodes`.
+- Back-edges (forming cycles) are permitted when bounded by `max_cycles` or `retries`.
+
+**Validation constraints:**
+- Every `src` and `dst` in `edges` MUST reference an element of `nodes`.
+- Every key in `bindings` MUST reference an element of `nodes`.
+- Every key in `retries` MUST reference an element of `nodes`.
+- Node IDs MUST be unique within `nodes`.
+- Unbounded cycles (back-edge without `max_cycles`, and no entry in `retries` for the target node) SHOULD be rejected by implementations.
+
+**Node-to-Action binding** (three-tier resolution):
+
+| Tier | Condition | Resolution |
+|------|-----------|------------|
+| Bound | Node ID present in `bindings` | Fetch the Action definition grain by hash; use its `tool_name`, `input_schema`, `output_schema` |
+| Named | No binding, but an Action definition grain exists with matching `tool_name` | Resolve by convention (implementation-defined lookup) |
+| Abstract | No binding, no matching tool | Node label is a human-readable instruction; executor (LLM or agent) interprets it |
+
+**Execution record relation:** When an agent executes a workflow node, it creates an Action grain (phase: complete or call/result) with a relation of type `mg:step_action:<node_id>` targeting the Workflow grain hash. This links execution records to the plan without modifying the immutable Workflow grain.
+
+**Example — linear pipeline:**
+
+```json
+{
+  "type": "workflow",
+  "trigger": "merge to main",
+  "nodes": ["build", "test", "deploy"],
+  "edges": [
+    {"src": "build", "dst": "test"},
+    {"src": "test", "dst": "deploy"}
+  ],
+  "created_at": 1711324800000
+}
+```
+
+**Example — parallel fork/join:**
+
+```json
+{
+  "type": "workflow",
+  "trigger": "PR opened",
+  "nodes": ["lint", "security", "compliance", "evaluate"],
+  "edges": [
+    {"src": "lint", "dst": "security"},
+    {"src": "lint", "dst": "compliance"},
+    {"src": "security", "dst": "evaluate"},
+    {"src": "compliance", "dst": "evaluate"}
+  ],
+  "created_at": 1711324800000
+}
+```
+
+**Example — conditional branching with retry and bindings:**
+
+```json
+{
+  "type": "workflow",
+  "trigger": "release requested",
+  "nodes": ["build", "unit_test", "lint", "integration_test", "stage_deploy", "approval", "prod_deploy", "rollback", "notify"],
+  "edges": [
+    {"src": "build", "dst": "unit_test"},
+    {"src": "build", "dst": "lint"},
+    {"src": "unit_test", "dst": "integration_test"},
+    {"src": "lint", "dst": "integration_test"},
+    {"src": "integration_test", "dst": "stage_deploy"},
+    {"src": "stage_deploy", "dst": "approval"},
+    {"src": "approval", "dst": "prod_deploy", "cond": "approved"},
+    {"src": "approval", "dst": "rollback", "cond": "rejected"},
+    {"src": "prod_deploy", "dst": "notify"},
+    {"src": "rollback", "dst": "notify"}
+  ],
+  "bindings": {
+    "build": "sha256:def111...",
+    "stage_deploy": "sha256:def333...",
+    "prod_deploy": "sha256:def444..."
+  },
+  "retries": {
+    "stage_deploy": 3
+  },
+  "created_at": 1711324800000
+}
+```
 
 ### 8.5 Action (type = 0x05)
 
@@ -3160,6 +3274,7 @@ footer        = 32OCTET  ; SHA-256 checksum
   "iinit": "invalidation_initiator",
   "rpol": "retention_policy",
   "rpri": "recall_priority",
+  "et": "embedding_text",
   "scope": "scope",
   "isw": "is_withdrawal",
   "basis": "basis",
@@ -3384,7 +3499,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 - **Belief:** Grain type 0x01 — a held claim, factual statement, or declarative knowledge about the world
 - **Event:** Grain type 0x02 — a discrete occurrence with start/end time
 - **State:** Grain type 0x03 — a persisting condition or status at a point in time
-- **Workflow:** Grain type 0x04 — a structured process or multi-step plan
+- **Workflow:** Grain type 0x04 — a directed graph of procedural steps, supporting sequential, conditional, parallel, and cyclic execution paths
 - **Action:** Grain type 0x05 — a completed tool invocation, API call, or agent action
 - **Observation:** Grain type 0x06 — a raw sensor or environmental reading without interpretation
 - **Goal:** Grain type 0x07 — a desired future state or objective

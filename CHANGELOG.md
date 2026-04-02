@@ -9,6 +9,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`embedding_text` common field (§6.1)** — optional `string` (compact key: `et`) providing source text for vector embedding and full-text indexing. When present, implementations SHOULD use this value instead of the grain's default per-type text representation. Enables document-derived grains to preserve source paragraph context for retrieval while maintaining structured subject/relation/object triples. Benchmarked at +29.4pp Recall@10 improvement on a 28-grain refund policy dataset. See `proposals/embedding-text-field.md`.
+- **Appendix C** — added `"et": "embedding_text"` to core field compaction table.
+- **Workflow grain type redesigned as directed graph (§8.4)** — Workflow grains now model directed graphs instead of flat step lists. New fields: `nodes` (array[string]), `edges` (array[map] with `src`, `dst`, `cond`, `max_cycles`), `bindings` (map[string→string] mapping node IDs to Action definition grain hashes), `retries` (map[string→int]). Supports sequential, parallel fork/join, conditional branching, and bounded cycles. Three-tier node-to-Action resolution (bound → named → abstract). Replaces `steps` array.
+- **Workflow structural semantics (§8.4)** — node types inferred from graph topology: fork (multiple outgoing edges), AND-join (multiple incoming edges), decision point (conditional edges), terminal (no outgoing edges). Entry point is first element of `nodes`.
+- **`mg:has_graph` relation** — replaces `mg:requires_steps` for Workflow grains. Reflects the directed graph model.
+
+### Changed
+
+- **Workflow grain description** — "Learned action sequence — procedural memory" → "Directed graph of procedural steps — plans, pipelines, processes".
+- **Workflow fields** — `steps` (array[string]) and `trigger` (string) replaced by `nodes`, `edges`, `bindings`, `retries`, and optional `trigger`. Edge schema uses nested `src`/`dst`/`cond`/`max_cycles` fields with compaction keys.
+- **`mg:requires_steps`** renamed to **`mg:has_graph`** in the `mg:` standard relation vocabulary.
+
+### CAL 1.1 — Added
+
+- **Multi-format output (§10.1.1)** — `FORMAT` and `AS` clauses now accept bracketed format lists (`FORMAT [markdown, json]`) with optional aliases (`FORMAT [json AS structured, markdown AS report]`). Single query execution produces multiple renderings. New multi-format response shape (`"formats"` object, §14.2.1). Maximum 5 formats per list. New error codes: `CAL-E110` (too many formats), `CAL-E113` (duplicate format key).
+- **Workflow graph syntax for ADD/SUPERSEDE (§8.8.1)** — dedicated graph syntax for workflow grains using `->` (sequential edges), `()` (parallel fork/join), `WHEN` (conditional edges), `* N` (retry bounds), `BIND` (node-to-Action mapping), and `ON` (trigger clause). Full graph replacement on SUPERSEDE.
+- **`BECAUSE` alias** — accepted as synonym for `REASON` in ADD, SUPERSEDE, and workflow statements.
+
+### CAL 1.1 — Changed
+
+- **Pipeline operators removed** — bare pipe syntax (`| ORDER BY`, `| LIMIT`, `| COUNT`, etc.) replaced by direct clause syntax (`ORDER BY`, `LIMIT`, `COUNT`). All examples and grammar productions updated. Backward-compatible at the semantic level.
+- **Workflow query fields** — `steps` field replaced by `node` and `binding` for grain-type-specific querying.
+- **Workflow content projection** — `nodes` joined with `->` arrow syntax replaces numbered `steps` list in SML/template output.
+- **`GrainTypeNotAddable` (CAL-E051)** — Workflow added to the set of addable grain types (Belief, Observation, Goal, Workflow).
+
+---
+
 ## [1.3] — 2026-03-03
 
 ### Added
@@ -59,7 +90,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 - **New `recall_priority` field** — storage tier hint: `"hot"`, `"warm"`, `"cold"`
 - **New `invalidation_policy` modes:** `"hold"` (litigation hold — blocks all erasure until explicitly lifted) and `"consent_cascade"` (auto-erasure within ≤ 30 days when linked Consent grain is revoked)
 - **`source_type` new values:** `"established_knowledge"` (physical constants, scientific laws) and `"axiomatic"` (mathematical axioms, tautologies)
-- **`mg:` standard relation vocabulary** — 21 standard relations: `mg:perceives`, `mg:knows`, `mg:said`, `mg:did`, `mg:infers`, `mg:agrees_with`, `mg:state_at`, `mg:requires_steps`, `mg:intends`, `mg:permits`, `mg:revokes`, `mg:prohibits`, `mg:requires`, `mg:prefers`, `mg:avoids`, `mg:delegates_to`, `mg:owned_by`, `mg:has_capability`, `mg:handed_off_to`, `mg:depends_on`, `mg:assigned_to`
+- **`mg:` standard relation vocabulary** — 21 standard relations: `mg:perceives`, `mg:knows`, `mg:said`, `mg:did`, `mg:infers`, `mg:agrees_with`, `mg:state_at`, `mg:has_graph`, `mg:intends`, `mg:permits`, `mg:revokes`, `mg:prohibits`, `mg:requires`, `mg:prefers`, `mg:avoids`, `mg:delegates_to`, `mg:owned_by`, `mg:has_capability`, `mg:handed_off_to`, `mg:depends_on`, `mg:assigned_to`
 - **HIPAA PHI tag normalization** — 18 normative `phi:` tag values per 45 CFR §164.514(b) Safe Harbor
 - **External citation schema** in `content_refs` — structured citations for doi/arxiv/pmid/isbn/rrid/clinicaltrials/url with `citation_role`
 - **§12.5 Agent Ownership and Legal Entity** — Belief grain pattern with `mg:owned_by` relation
