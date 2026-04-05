@@ -756,6 +756,7 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:handed_off_to` | Event | Session handoff event record (§28.7) |
 | `mg:depends_on` | Goal | Task dependency (distinct from `parent_goals` hierarchy) |
 | `mg:assigned_to` | Goal | Task assigned to agent for execution |
+| `mg:capable_of` | Belief | Learned skill with proficiency and strategies (§28.8 Skill Convention) |
 
 ### 8.1 Belief (type = 0x01)
 
@@ -2911,7 +2912,96 @@ When Agent A transfers control of a conversation to Agent B, the handoff is reco
 3. Agent B ingests the referenced grains, validates the delegation scope, and continues with a new `run_id` but the same `session_id`.
 4. When Agent B completes its task, it writes a Goal grain with `goal_state: "satisfied"` linked via `derived_from` to the delegation grain, and control returns to the agent specified in `return_to`.
 
-### 28.8 CAL and SML — Companion Query and Markup Languages
+### 28.8 Skill Convention
+
+Agents that learn reusable capabilities SHOULD represent them as Belief grains with `relation: "mg:capable_of"` and a structured `object` map. A skill grain captures what an agent can do, how well it can do it, and the procedural knowledge needed to transfer the capability to another agent.
+
+**Distinction from related constructs:**
+
+| Construct | Grain type | What it captures |
+|---|---|---|
+| Agent Capability (§28.5) | Belief (`mg:has_capability`) | Static identity card — what the agent *is built to do* |
+| Skill (§28.8) | Belief (`mg:capable_of`) | Learned capability — what the agent *has learned to do*, with proficiency and strategies |
+| Workflow (§8.4) | Workflow | Fixed action sequence — a single procedure, not an adaptive capability |
+
+**Convention:**
+```json
+{
+  "type": "belief",
+  "subject": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+  "relation": "mg:capable_of",
+  "object": {
+    "name": "code_review",
+    "description": "Review code changes for correctness, style, and security issues",
+    "proficiency": 0.82,
+    "strategies": [
+      {
+        "condition": "security_focused",
+        "workflow": "mg:sha256:a1b2c3...",
+        "description": "OWASP-oriented review for auth and input handling code"
+      },
+      {
+        "condition": "style_focused",
+        "workflow": "mg:sha256:d4e5f6...",
+        "description": "Linting and convention compliance review"
+      }
+    ],
+    "prerequisites": ["mg:sha256:f7e8d9..."],
+    "practice_count": 47,
+    "last_practiced_at": 1711929600000,
+    "transferable": true
+  },
+  "confidence": 0.82,
+  "source_type": "agent_inferred",
+  "namespace": "agent:skills",
+  "author_did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+  "related_to": [
+    {"target": "mg:sha256:a1b2c3...", "type": "elaborates"},
+    {"target": "mg:sha256:d4e5f6...", "type": "elaborates"}
+  ]
+}
+```
+
+The `object` map is an open schema. Standard keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `name` | string | Machine-readable skill identifier |
+| `description` | string | Human-readable summary of what the skill enables |
+| `proficiency` | float64, [0.0, 1.0] | Current mastery level. SHOULD equal the grain's top-level `confidence`. |
+| `strategies` | array[map] | Context-dependent approaches. Each entry: `{condition: string, workflow: string, description?: string}`. The `workflow` value is a content address of a Workflow grain (§8.4). |
+| `prerequisites` | array[string] | Content addresses of Skill Belief grains that must be acquired before this skill is effective |
+| `practice_count` | int | Number of successful applications (mirrors `success_count` in core fields) |
+| `last_practiced_at` | int64 | Epoch ms of most recent successful application |
+| `transferable` | bool | If `true`, another agent MAY ingest this grain and its referenced Workflow grains to acquire the skill |
+| `input_modalities` | array[string] | What the skill operates on: `"text"`, `"image"`, `"code"`, `"audio"`. Open enum. |
+| `output_modalities` | array[string] | What the skill produces |
+| `domain` | string | Domain context: `"software"`, `"research"`, `"healthcare"`, `"finance"`. Open enum. |
+
+**Namespace:** Skill Belief grains SHOULD use the `"agent:skills"` namespace to enable efficient discovery queries.
+
+**Proficiency lifecycle:**
+
+1. **Acquisition.** When an agent first learns a capability, it writes a Skill Belief grain with an initial `proficiency` (typically low). The `derived_from` field SHOULD reference the grains (Events, Actions, Reasoning) that contributed to learning.
+2. **Improvement.** Each time proficiency changes, the agent supersedes the previous Skill Belief grain with an updated `proficiency` and incremented `practice_count`. The supersession chain provides a full learning history.
+3. **Degradation.** Implementations MAY decay proficiency over time if `last_practiced_at` exceeds a threshold. This is an index-layer concern, not a grain mutation — the store writes a new superseding grain with reduced proficiency.
+
+**Skill transfer between agents:**
+
+1. Agent A queries its store: `type=belief, relation="mg:capable_of", namespace="agent:skills", transferable=true`.
+2. Agent A shares the Skill Belief grain and all Workflow grains referenced in `strategies` with Agent B (via `get_batch` on the content addresses).
+3. Agent B ingests the grains, rewrites the Skill Belief with its own `author_did`, initial `proficiency: 0.0`, and `practice_count: 0`, and sets `derived_from` to Agent A's original Skill Belief content address. The `origin_did` field preserves Agent A's DID for provenance.
+4. Agent B improves proficiency through practice, superseding the skill grain as described above.
+
+**Skill discovery:**
+
+Agents discover available skills by querying: `type=belief, relation="mg:capable_of", namespace="agent:skills", system_valid_to=null, sort=proficiency DESC`.
+
+To find agents capable of a specific skill: `type=belief, relation="mg:capable_of", object.name="code_review", system_valid_to=null`.
+
+> **Note — promotion path:** If the convention approach proves insufficient — for instance, if skill queries become performance-critical across large multi-agent deployments, or if multiple domain profiles independently require skill-specific fields at the type level — a dedicated Skill grain type (`0x0B`) with its own required fields and type byte MAY be introduced in a future OMS version, following the precedent set by Consent (§8.10).
+
+### 28.9 CAL and SML — Companion Query and Markup Languages
 
 The query conventions in this section (§28.1–§28.7) define OMS store operations and response envelopes at the structural level. The **Context Assembly Language (CAL)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) is the companion specification that provides a formal, deterministic syntax for invoking these operations from an agent or LLM.
 

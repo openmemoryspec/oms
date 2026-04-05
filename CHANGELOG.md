@@ -51,7 +51,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 - **§27.7 Consensus Grain Usage for Action Definition Validation** — documented usage pattern for recording multi-source agreement on Action definition grains via the Consensus grain type.
 - **Updated §27.1 tool definition example** to include `output_schema` field.
 - **Updated Anthropic API alignment table** in §27.1 to note `output_schema` has no Anthropic equivalent.
-- **`CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md` — Context Assembly Language v1.0** bundled into this repository as part of OMS v1.3. CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS stores. **SML (Semantic Markup Language)** is now its own standalone specification at `SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md`. OMS spec gains §1.5 (Companion Specifications) and §28.8 (CAL/SML store operation mapping).
+- **`CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md` — Context Assembly Language v1.0** bundled into this repository as part of OMS v1.3. CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS stores. **SML (Semantic Markup Language)** is now its own standalone specification at `SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md`. OMS spec gains §1.5 (Companion Specifications) and §28.9 (CAL/SML store operation mapping).
 
 ### Changed
 
