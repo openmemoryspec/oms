@@ -41,7 +41,7 @@ Think of the `.mg` container as what JSON is to APIs or `.git` objects are to ve
 | Belief | `0x01` | Declarative knowledge: subject–relation–object triple |
 | Event | `0x02` | Timestamped occurrence: message, interaction, or utterance |
 | State | `0x03` | Agent state snapshot at a point in time |
-| Workflow | `0x04` | Multi-step procedural record |
+| Workflow | `0x04` | Directed graph of procedural steps |
 | Action | `0x05` | Tool invocation or code execution |
 | Observation | `0x06` | Sensor or cognitive input |
 | Goal | `0x07` | Intent, objective, or desired outcome |
@@ -188,7 +188,7 @@ This is the SML block injected into the LLM system prompt for the billing disput
   <event role="user"  time="5d ago">Can I switch to monthly billing?</event>
   <event role="agent" time="5d ago">Monthly billing is available — I've sent a link to make that change.</event>
 
-  <workflow trigger="billing_dispute_opened" state="open">1. verify charge  2. check renewal date  3. explain or escalate  4. offer billing-cycle change  5. close ticket</workflow>
+  <workflow trigger="billing_dispute_opened" state="open">verify_charge -> check_renewal_date -> explain_or_escalate -> offer_billing_cycle_change -> close_ticket</workflow>
 
   <action tool="get_invoice"    phase="completed">retrieved invoice INV-2026-02-28: $299 annual Professional plan renewal</action>
   <action tool="get_plan_history" phase="completed">plan enrolled 2024-03-01, renewed annually; last renewal 2026-02-28</action>

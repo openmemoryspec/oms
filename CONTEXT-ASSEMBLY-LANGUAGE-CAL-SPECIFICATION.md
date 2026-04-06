@@ -1,6 +1,6 @@
 # CAL (Context Assembly Language) Specification v1.0
 
-**Status:** Standards Track | **Date:** 2026-03-03 | **Version:** 1.0 | **Classification:** Experimental
+**Status:** Standards Track | **Date:** 2026-03-05 | **Version:** 1.1 | **Classification:** Experimental
 **Part of:** [Open Memory Specification (OMS) v1.3](./SPECIFICATION.md)
 ---
 
@@ -235,7 +235,7 @@ recall_priority, epistemic_status
 ```
 role, session_id, parent_message_id, model_id, content,
 context, plan,
-trigger, steps,
+trigger, nodes, edges, bindings, retries,
 tool_name, action_phase, is_error, tool_call_id,
 observer_id, observer_type,
 goal_state, assigned_agent, deadline, depends_on,
@@ -342,7 +342,9 @@ let_ref         = "$" , identifier ;
 
 budget_clause   = "BUDGET" , positive_integer , ( "tokens" | "grains" ) ;
 priority_clause = "PRIORITY" , label , { ">" , label } ;
-format_clause   = "FORMAT" , format_spec ;
+format_clause   = "FORMAT" , format_value ;
+format_value    = format_spec | "[" , aliased_format , { "," , aliased_format } , "]" ;
+aliased_format  = format_spec , [ "AS" , identifier ] ;
 format_spec     = format_type
                 | preset_name
                 | "TEMPLATE" , template_name
@@ -360,7 +362,7 @@ since_clause    = "SINCE" , string_literal ;
 like_clause     = "LIKE" , string_literal ;
 between_clause  = "BETWEEN" , value , "AND" , value ;
 contradictions_clause = "CONTRADICTIONS" ;
-as_clause       = "AS" , format_type ;
+as_clause       = "AS" , ( format_spec | "[" , aliased_format , { "," , aliased_format } , "]" ) ;
 
 thread_clause   = "THREAD" , thread_target ;
 thread_target   = string_literal | "FROM" , hash_literal ;
@@ -407,7 +409,7 @@ grain_field_name = event_field | state_field | workflow_field
 
 event_field     = "role" | "session_id" | "parent_message_id" | "model_id" | "content" ;
 state_field     = "context" | "plan" ;
-workflow_field  = "trigger" | "steps" ;
+workflow_field  = "trigger" | "node" | "binding" ;
 action_field    = "tool_name" | "action_phase" | "is_error" | "tool_call_id" ;
 observation_field = "observer_id" | "observer_type" ;
 goal_field      = "goal_state" | "assigned_agent" | "deadline" | "depends_on" ;
@@ -442,7 +444,7 @@ consistency_level = "eventual" | "bounded" , "(" , number , ")" | "linearizable"
 disclosure_level = "summary" | "headlines" | "full" ;
 extension_option = "x_" , identifier , [ "(" , value_list , ")" ] ;
 
-pipeline        = { "|" , pipe_stage } ;
+pipeline        = { pipe_stage } ;
 pipe_stage      = select_stage | order_stage | limit_stage | offset_stage
                 | count_stage | first_stage | subjects_stage | objects_stage
                 | hashes_stage | group_stage | project_stage ;
@@ -463,8 +465,10 @@ project_field   = field_name | grain_field_name | domain_field ;
 
 (* --- Tier 1: Evolve --- *)
 
-add_stmt        = "ADD" , grain_type_singular , add_clause , { add_clause } , reason_clause ;
-supersede_stmt  = "SUPERSEDE" , ( hash_literal | parameter ) , set_clause , { set_clause } , reason_clause ;
+add_stmt        = "ADD" , grain_type_singular , add_clause , { add_clause } , reason_clause
+                | workflow_add_stmt ;
+supersede_stmt  = "SUPERSEDE" , ( hash_literal | parameter ) , set_clause , { set_clause } , reason_clause
+                | workflow_supersede_stmt ;
 revert_stmt     = "REVERT" , ( hash_literal | parameter ) , reason_clause ;
 
 add_clause      = "SET" , ( add_field | grain_add_field ) , "=" , value ;
@@ -476,7 +480,24 @@ observation_add_field = "observer_id" | "observer_type" ;
 
 set_clause      = "SET" , evolve_field , "=" , value ;
 evolve_field    = "object" | "confidence" | "importance" | "tags" ;
-reason_clause   = "REASON" , string_literal ;
+reason_clause   = ( "REASON" | "BECAUSE" ) , string_literal ;
+
+(* --- Workflow graph syntax --- *)
+
+workflow_add_stmt       = "ADD" , "workflow" , string_literal ,
+                          [ on_clause ] , graph_line , { graph_line } ,
+                          { bind_clause } , reason_clause ;
+workflow_supersede_stmt = "SUPERSEDE" , hash_literal ,
+                          [ on_clause ] , graph_line , { graph_line } ,
+                          { bind_clause } , reason_clause ;
+on_clause               = "ON" , string_literal ;
+bind_clause             = "BIND" , node_name , "=" , hash_literal ;
+
+graph_line              = node_or_group , { "->" , node_or_group , [ when_mod ] , [ repeat_mod ] } ;
+node_or_group           = node_name | "(" , node_name , { "," , node_name } , ")" ;
+node_name               = identifier | string_literal ;
+when_mod                = "WHEN" , string_literal ;
+repeat_mod              = "*" , positive_integer ;
 
 (* --- Template definitions --- *)
 
@@ -627,8 +648,9 @@ All Belief fields are in the common set (`subject`, `relation`, `object`, `confi
 
 | Field | Type | Operators | Notes |
 |-------|------|-----------|-------|
-| `trigger` | String | `=`, `!=` | Trigger condition (e.g., `"on:user_message"`) |
-| `steps` | String | `=` | Semantic search on workflow steps |
+| `trigger` | String | `=`, `!=` | Trigger condition (e.g., `"on:merge_to_main"`) |
+| `node` | String | `=` | Match workflows containing a specific node |
+| `binding` | String | `=` | Match workflows binding to a specific Action grain hash |
 
 #### Action (0x05) -- `RECALL actions`
 
@@ -740,7 +762,7 @@ OMS defines a standard `mg:` relation vocabulary. CAL provides first-class suppo
 | `mg:infers` | Knowledge | Agent | Conclusion | Inference result |
 | `mg:agrees_with` | Consensus | Agent | Proposition | Agreement record |
 | `mg:state_at` | Observation | Agent | State snapshot | Point-in-time state |
-| `mg:requires_steps` | Workflow | Process | Step sequence | Workflow definition |
+| `mg:has_graph` | Workflow | Process | Graph of steps | Workflow definition |
 | `mg:intends` | Lifecycle | Entity | Objective | Goal declaration |
 | `mg:permits` | Permission | Grantor DID | Action/scope | Permission grant |
 | `mg:revokes` | Permission | Grantor DID | Action/scope | Permission withdrawal |
@@ -774,7 +796,7 @@ CAL defines **relation category shortcuts** as syntactic sugar for common multi-
 ```sql
 -- All preference-related beliefs about alice
 RECALL beliefs WHERE subject = "alice" AND relation IS PREFERENCE
-  | ORDER BY confidence DESC
+  ORDER BY confidence DESC
 
 -- All permission records for a DID
 RECALL WHERE subject = "did:key:z6Mk..." AND relation IS PERMISSION
@@ -812,8 +834,8 @@ Retrieves grains matching the given filters. Returns results using the OMS Stand
 ```sql
 RECALL beliefs WHERE subject = "alice" AND relation = "prefers"
   WITH contradiction_detection
-  | ORDER BY confidence DESC
-  | LIMIT 10
+  ORDER BY confidence DESC
+  LIMIT 10
 ```
 
 RECALL supports semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS -- see section 9), grain-type-specific fields (section 6), thread shorthand (section 8.1.1), and per-query format control via AS.
@@ -821,7 +843,7 @@ RECALL supports semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIO
 ```sql
 -- With grain-type-specific fields
 RECALL actions WHERE tool_name = "get_weather" AND is_error = false
-  | ORDER BY time DESC | LIMIT 20
+  ORDER BY time DESC LIMIT 20
 
 -- With domain profile fields
 RECALL beliefs WHERE tags INCLUDE ["profile:healthcare"]
@@ -835,7 +857,7 @@ The `THREAD` keyword provides concise syntax for conversation retrieval:
 ```sql
 -- Full conversation in a session
 RECALL events THREAD "sess-123"
--- Expands to: RECALL events WHERE session_id = "sess-123" | ORDER BY time ASC
+-- Expands to: RECALL events WHERE session_id = "sess-123" ORDER BY time ASC
 
 -- Full thread containing a specific message
 RECALL events THREAD FROM sha256:a1b2c3d4...
@@ -854,7 +876,7 @@ CAL/1 ASSEMBLE user_context
     events:   (RECALL events WHERE user_id = "alice" RECENT 5),
     history:  (RECALL beliefs ABOUT "alice"
                 WHERE relation = "prefers" WITH superseded
-                | ORDER BY time DESC | LIMIT 3)
+                ORDER BY time DESC LIMIT 3)
   BUDGET 2000 tokens
   PRIORITY beliefs > goals > events > history
   FORMAT markdown
@@ -971,9 +993,74 @@ ADD belief
   REASON "user stated preference during onboarding conversation"
 ```
 
-**Addable grain types:** Belief, Observation, Goal. Events, Actions, States, and other types represent system-generated records and are not user-creatable.
+**Addable grain types:** Belief, Observation, Goal, Workflow. Events, Actions, States, and other types represent system-generated records and are not user-creatable.
 
-**Required SET fields:** `subject`, `relation`, `object`. `REASON` is mandatory.
+**Required SET fields (Belief):** `subject`, `relation`, `object`. `REASON` is mandatory.
+
+#### 8.8.1 ADD Workflow (Graph Syntax)
+
+Workflows use a dedicated graph syntax instead of SET clauses. The graph is expressed with arrows (`->`), parallel groups (`()`), conditions (`WHEN`), and repeat bounds (`* N`).
+
+```sql
+-- Simple linear workflow
+ADD workflow "nightly backup"
+  ON "cron 0 2 * * *"
+  snapshot -> compress -> upload
+  REASON "automate database backups"
+
+-- Parallel fork/join
+ADD workflow "code review"
+  ON "PR opened"
+  lint -> (security_review, compliance_review) -> evaluate
+  REASON "parallel review gates"
+
+-- Conditional branching
+ADD workflow "release gate"
+  ON "review complete"
+  evaluate -> implement WHEN "approved"
+  evaluate -> reject WHEN "rejected"
+  REASON "approval-based routing"
+
+-- Retry on failure
+ADD workflow "resilient deploy"
+  ON "release"
+  build -> deploy * 3 -> notify
+  REASON "retry deploy up to 3 times"
+
+-- Full pipeline with bindings
+ADD workflow "release pipeline"
+  ON "merge to main"
+  build -> (unit_test, lint) -> integration_test
+  integration_test -> stage_deploy * 3
+  stage_deploy -> approval
+  approval -> prod_deploy WHEN "approved"
+  approval -> rollback WHEN "rejected"
+  prod_deploy -> notify
+  rollback -> notify
+  BIND build = sha256:def111...
+  BIND stage_deploy = sha256:def333...
+  BIND prod_deploy = sha256:def444...
+  REASON "standard release process"
+```
+
+**Clause order (fixed):** name → ON → graph lines → BIND → REASON
+
+**Graph operators:**
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `->` | Sequential edge | `build -> test` |
+| `(a, b)` | Parallel fork/join | `(lint, test) -> merge` |
+| `WHEN "cond"` | Conditional edge | `-> deploy WHEN "approved"` |
+| `* N` | Repeat up to N times on failure | `deploy * 3` |
+
+**Operator precedence:** `* N` (highest) > `WHEN` > `->` (lowest).
+
+**Structural inference:** Node types are inferred from graph topology — a node with multiple unconditional outgoing edges is a fork, a node receiving multiple edges is an AND-join, a node with `WHEN` edges is a decision point.
+
+**BIND clause:** Maps a node name to an Action definition grain hash (`action_phase: "definition"`). The executor fetches the definition to discover `tool_name`, `input_schema`, etc. Unbound nodes are resolved by name convention or treated as abstract steps.
+
+**Node names:** Bare identifiers (`build`, `unit_test`) or quoted strings (`"send welcome email"`). Reserved words (`ADD`, `workflow`, `ON`, `WHEN`, `BIND`, `REASON`, `BECAUSE`) must be quoted.
 
 ### 8.9 SUPERSEDE (Tier 1)
 
@@ -986,7 +1073,21 @@ SUPERSEDE sha256:target_hash
   REASON "user explicitly changed preference"
 ```
 
-Only Belief grains can be superseded via CAL. At least one `SET` clause and `REASON` are required.
+**Belief supersession:** At least one `SET` clause and `REASON` are required.
+
+**Workflow supersession:** Uses graph syntax (full graph replacement):
+
+```sql
+SUPERSEDE sha256:abc123...
+  ON "merge to main"
+  build -> (unit_test, lint, security_scan) -> integration_test
+  integration_test -> canary_deploy * 3
+  canary_deploy -> approval
+  approval -> prod_deploy WHEN "approved"
+  approval -> rollback WHEN "rejected"
+  BIND security_scan = sha256:def888...
+  REASON "added security scan, replaced stage with canary"
+```
 
 ### 8.10 REVERT (Tier 1)
 
@@ -1017,7 +1118,7 @@ LET bindings name intermediate RECALL results that can be referenced by `$name` 
 ```sql
 CAL/1
 LET $team_members = RECALL beliefs
-  WHERE relation = "member_of" AND object = "team-alpha" | SUBJECTS;
+  WHERE relation = "member_of" AND object = "team-alpha" SUBJECTS;
 
 LET $team_prefs = RECALL beliefs
   WHERE subject IN ($team_members) AND relation = "prefers";
@@ -1071,7 +1172,7 @@ RECALL beliefs ABOUT "alice"
 
 ```sql
 RECALL events ABOUT "alice" RECENT 5
--- Desugars to: RECALL events WHERE subject = "alice" | ORDER BY time DESC | LIMIT 5
+-- Desugars to: RECALL events WHERE subject = "alice" ORDER BY time DESC LIMIT 5
 ```
 
 ### 9.3 SINCE
@@ -1140,6 +1241,45 @@ RECALL events BETWEEN 1709251200 AND 1709337600
 | `triples` | Triples | Subject-relation-object triples |
 | `toon` | TOON | Token-Oriented Object Notation — CSV-tabular for uniform grain arrays; ~40% fewer tokens vs JSON. Optimised for large RECALL result sets and budget-constrained ASSEMBLE. See Section 10.9. |
 
+### 10.1.1 Multi-Format Output
+
+The `FORMAT` and `AS` clauses accept either a single format name or a bracketed list of format names. When a list is provided, the implementation executes the query **once** and renders the result set into **each** requested format, returning all renderings in a single response.
+
+**Single format** (existing behavior):
+
+```
+CAL/1 RECALL beliefs ABOUT "alice" FORMAT markdown
+CAL/1 RECALL beliefs ABOUT "alice" AS json
+```
+
+**Multi-format:**
+
+```
+CAL/1 RECALL beliefs ABOUT "alice" FORMAT [markdown, json]
+CAL/1 RECALL beliefs ABOUT "alice" AS [markdown, json]
+```
+
+**Multi-format with aliases:**
+
+Each format in a bracketed list MAY include an `AS <identifier>` alias. When present, the alias becomes the key in the multi-format response object (Section 14.2.1) instead of the canonical format name. Aliases are particularly useful when the list contains multiple templates (which would otherwise all share the key `"template"`) or when the client wants semantically meaningful keys.
+
+```
+CAL/1 RECALL beliefs FORMAT [json AS customers, markdown AS report]
+CAL/1 RECALL beliefs FORMAT [json AS structured, TEMPLATE "{{subject}}: {{object}}" AS oneliner]
+CAL/1 RECALL beliefs FORMAT [TEMPLATE "{{subject}}" AS names, TEMPLATE "{{object}}" AS values]
+```
+
+**Rules:**
+
+1. The query executes once. All format renderings share the same result set.
+2. When a single format is specified, the response uses the `"format"` / `"content"` fields (Section 14.2). When a format list is specified, the response uses a `"formats"` object keyed by format name or alias (Section 14.2.1).
+3. `FORMAT [json]` (single-element list) uses the multi-format response shape (`"formats"` object with one key), not the single-format shape.
+4. `FORMAT []` (empty list) is a parse error.
+5. Duplicate format names in the list (without aliases) are deduplicated silently; each format is rendered at most once.
+6. Maximum 5 formats per list. Exceeding this limit produces a `CAL-E110` error.
+7. When aliases are used, the effective key (alias or canonical name) MUST be unique across the list. Duplicate keys where at least one is an explicit alias produce a `CAL-E113` error.
+8. Aliases follow identifier syntax (`[a-z][a-z0-9_]*`). Aliases are only supported in bracketed format lists, not in bare comma-separated lists.
+
 ### 10.2 Custom Templates (Mustache-subset)
 
 CAL templates use a strict subset of Mustache:
@@ -1174,7 +1314,7 @@ Each grain type defines a **content rule** (what becomes the text content of the
 | **Observation** | `object` (what was observed) | `observer`? |
 | **Reasoning** | `conclusion` | `type`? |
 | **State** | `plan` (summary) | `context`? |
-| **Workflow** | `steps` (joined as readable text) | `trigger`? |
+| **Workflow** | `nodes` (joined as readable text) | `trigger`? |
 | **Consensus** | `object` (the agreed claim) | `threshold`?, `count`? |
 | **Consent** | `purpose` | `action`, `grantor`, `grantee` |
 
@@ -1364,7 +1504,7 @@ FORMAT TEMPLATE {
 
   <state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>
 
-  <workflow trigger="review_prep_requested">1. retrieve Q1 metrics  2. identify narrative arc  3. draft slide outline  4. populate data  5. send for review by 2026-03-14</workflow>
+  <workflow trigger="review_prep_requested">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>
 
   <consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>
 
@@ -1557,8 +1697,8 @@ The `PROJECT` clause (Section 10.3.5) works with TOON. The projected fields beco
 
 ```sql
 CAL/1 RECALL observations WHERE tags INCLUDE ["profile:healthcare"]
-  | PROJECT content(object), attr(hc:patient_id, hc:encounter_id)
-  | LIMIT 10 AS toon
+  PROJECT content(object), attr(hc:patient_id, hc:encounter_id)
+  LIMIT 10 AS toon
 ```
 
 Output (root array — RECALL result):
@@ -1736,7 +1876,7 @@ RECALL beliefs WHERE tags INCLUDE ["profile:healthcare"]
   AND hc:patient_id = "P-12345"
   AND hc:condition_code IN ("J06.9", "J20.9")
   AND relation = "mg:knows"
-  | ORDER BY time DESC | LIMIT 20
+  ORDER BY time DESC LIMIT 20
 ```
 
 The parser SHOULD emit warning `CAL-W002` if a domain field is used without the corresponding `profile:` tag.
@@ -1825,6 +1965,45 @@ A formatted representation for direct insertion into LLM context windows. The co
 
 The machine envelope (Section 14.1) carries hashes, namespaces, full timestamps, and other storage metadata. These MUST NOT appear in the LLM content layer.
 
+#### 14.2.1 Multi-Format Response
+
+When the query specifies a format list (`FORMAT [markdown, json]`), the response replaces the single `"format"` / `"content"` fields with a `"formats"` object keyed by format name (or alias, if provided). Each value is the rendered text for that format.
+
+```json
+{
+  "_cal": {
+    "version": "1.0",
+    "statement_type": "recall",
+    "query_hash": "sha256:...",
+    "duration_ms": 38
+  },
+  "formats": {
+    "markdown": "## Beliefs\n- alice prefers dark mode (confidence: 0.92)\n",
+    "json": [
+      {"subject": "alice", "relation": "prefers", "object": "dark mode", "confidence": 0.92}
+    ]
+  },
+  "grain_count": 1,
+  "total": 1
+}
+```
+
+**With aliases** (`FORMAT [json AS structured, TEMPLATE "{{subject}}: {{object}}" AS oneliner]`):
+
+```json
+{
+  "_cal": { "version": "1.0", "statement_type": "recall", "query_hash": "sha256:...", "duration_ms": 42 },
+  "formats": {
+    "structured": [{"subject": "alice", "relation": "prefers", "object": "dark mode"}],
+    "oneliner": "alice: dark mode\n"
+  },
+  "grain_count": 1,
+  "total": 1
+}
+```
+
+**Discriminator:** Clients distinguish single-format from multi-format responses by checking for `"format"` (string) vs `"formats"` (object). Exactly one of the two keys is present when a FORMAT clause was specified. When aliases are used, the `"formats"` keys are the alias identifiers, not the canonical format names.
+
 ### 14.3 Progressive Disclosure
 
 | Level | Metadata Density | When Used |
@@ -1848,7 +2027,7 @@ Each grain type projects its fields into a **text content** string and **attribu
 | Observation | `object` | `<observation observer="system">alice opened incident-dashboard at 09:14 UTC</observation>` |
 | Reasoning | `conclusion` | `<reasoning type="deductive">alice is prioritising reliability given 3 P0 incidents; lead with incident reduction narrative</reasoning>` |
 | State | `plan` summary | `<state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>` |
-| Workflow | `steps` joined | `<workflow trigger="review_prep_requested">1. retrieve Q1 metrics  2. identify narrative arc  3. draft slide outline  4. populate data  5. send for review by 2026-03-14</workflow>` |
+| Workflow | `nodes` joined | `<workflow trigger="review_prep_requested">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>` |
 | Consensus | `object` | `<consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>` |
 | Consent | `purpose` | `<consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>` |
 
@@ -1937,7 +2116,7 @@ Implementations MUST declare cross-lingual capability in `DESCRIBE capabilities`
 Default: Unicode code point order (binary sort). Locale-aware sorting requested via `WITH locale("xx")`:
 
 ```sql
-RECALL beliefs ABOUT "alice" | ORDER BY object ASC WITH locale("de")
+RECALL beliefs ABOUT "alice" ORDER BY object ASC WITH locale("de")
 ```
 
 Locale-aware sorting is optional. Implementations that do not support it MUST ignore the `locale()` option with a warning.
@@ -2109,7 +2288,7 @@ CAL queries execute through the same read path as all other interfaces. No CAL s
 
 ### 19.2 GDPR Implications
 
-- **Art. 15 (Right of Access):** CAL enables DSAR via `RECALL WHERE user_id = "alice" | COUNT`
+- **Art. 15 (Right of Access):** CAL enables DSAR via `RECALL WHERE user_id = "alice" COUNT`
 - **Art. 16 (Right to Rectification):** CAL SUPERSEDE enables correction of inaccurate personal data.
 - **Art. 17 (Right to Erasure):** Excluded at grammar level. Erasure only via implementation-specific APIs.
 - **Art. 20 (Data Portability):** CAL can serve as query interface for exports.
@@ -2243,6 +2422,7 @@ See [Appendix C](#appendix-c-error-code-registry) for the complete registry. Err
 | CAL-E075 -- CAL-E082 | Streaming | 8 |
 | CAL-E085 -- CAL-E096 | Template | 12 |
 | CAL-E100 | Version | 1 |
+| CAL-E110, CAL-E113 | Multi-Format | 2 |
 
 ### 22.3 Warning Codes
 
@@ -2298,7 +2478,7 @@ CAL introduces compliance verification checks that implementations MUST validate
 ### Level 2: Extended (SHOULD implement)
 
 Everything in Core, plus:
-- Pipeline operators (`| SELECT`, `| ORDER BY`, `| LIMIT`, `| COUNT`, `| FIRST`, `| GROUP BY`)
+- Pipeline clauses (`SELECT`, `ORDER BY`, `LIMIT`, `COUNT`, `FIRST`, `GROUP BY`)
 - Set operators (`UNION`, `INTERSECT`, `EXCEPT`)
 - Subqueries (`WHERE field IN (subquery | EXTRACTOR)`)
 - `EXPLAIN` mode
@@ -2404,7 +2584,7 @@ It can read, assemble, and evolve memories, but never delete them.
 
 ### Read operations:
   RECALL [MY] [type] [IN "ns"] [ABOUT "entity"] [WHERE conditions] [WITH options]
-    [| pipeline] [RECENT n] [SINCE "time"] [AS format]
+    [clauses] [RECENT n] [SINCE "time"] [AS format]
   ASSEMBLE name FOR "intent" FROM label:(RECALL ...), ...
     BUDGET n tokens PRIORITY l1 > l2 FORMAT markdown [STREAM]
   EXISTS sha256:hash
@@ -2439,9 +2619,9 @@ It can read, assemble, and evolve memories, but never delete them.
 
 ### Shortcuts: ABOUT, RECENT n, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN
 
-### Pipeline: | SELECT f1,f2 | ORDER BY field [ASC|DESC] | LIMIT n | COUNT
-             | FIRST | SUBJECTS | OBJECTS | HASHES | GROUP BY field
-             | PROJECT content(f1,f2), attr(f3,f4)
+### Clauses: SELECT f1,f2 ORDER BY field [ASC|DESC] LIMIT n COUNT
+             FIRST SUBJECTS OBJECTS HASHES GROUP BY field
+             PROJECT content(f1,f2), attr(f3,f4)
 
 ### Parameters: Use $name for dynamic values
 
@@ -2452,6 +2632,10 @@ It can read, assemble, and evolve memories, but never delete them.
 ### Custom templates:
   FORMAT TEMPLATE name                         -- use named template
   FORMAT TEMPLATE { ELEMENT { <{{grain.type}}>{{grain.content}}</{{grain.type}}> } }
+
+### Format aliases (in bracketed lists):
+  FORMAT [json AS customers, markdown AS report]
+  FORMAT [TEMPLATE "{{subject}}" AS names, TEMPLATE "{{object}}" AS values]
 
 ### Output formats:
   sml (default structured): flat tag-based — <belief subject="alice" confidence="0.92">prefers dark mode</belief>
@@ -2551,6 +2735,13 @@ All error codes use the `CAL-E` prefix.
 | CAL-E050 | MissingRequiredField -- ADD requires subject, relation, object |
 | CAL-E051 | GrainTypeNotAddable -- only Belief, Observation, Goal can be created |
 | CAL-E052 | AddQuotaExceeded -- too many ADD operations |
+
+### Multi-Format Errors (CAL-E110, CAL-E113)
+
+| Code | Description |
+|------|-------------|
+| CAL-E110 | Too many formats in multi-format list (maximum 5) |
+| CAL-E113 | Duplicate format key in multi-format list (alias or canonical name collision) |
 
 ### Shortcut and Grain Type Errors (CAL-E060 -- CAL-E066)
 
@@ -2699,7 +2890,8 @@ CHUNK, PAUSE, RESUME, CANCEL
 | State | `context` | String | `=`, `!=` |
 | State | `plan` | String | `=` |
 | Workflow | `trigger` | String | `=`, `!=` |
-| Workflow | `steps` | String | `=` |
+| Workflow | `node` | String | `=` |
+| Workflow | `binding` | String | `=` |
 | Action | `tool_name` | String | `=`, `!=`, `IN` |
 | Action | `action_phase` | String | `=` |
 | Action | `is_error` | Boolean | `=` |
@@ -2741,12 +2933,13 @@ CHUNK, PAUSE, RESUME, CANCEL
 
 | Version | Date | Change |
 |---------|------|--------|
+| 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
 
 ---
 
 **Document Status:** This is the CAL (Context Assembly Language) Specification v1.0. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.3 — see [SPECIFICATION.md](./SPECIFICATION.md).
 
-**Last Updated:** 2026-03-03
+**Last Updated:** 2026-03-05
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
 **Copyright:** Public Domain (CC0 1.0 Universal)

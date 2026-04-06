@@ -86,7 +86,7 @@ The following example shows a single assembled context covering every grain type
 
   <state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>
 
-  <workflow trigger="review_prep_requested">1. retrieve Q1 metrics  2. identify narrative arc  3. draft slide outline  4. populate data  5. send for review by 2026-03-14</workflow>
+  <workflow trigger="review_prep_requested">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>
 
   <consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>
 

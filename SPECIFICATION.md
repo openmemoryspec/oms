@@ -200,7 +200,7 @@ Hexadecimal values are lowercase. Byte sequences are represented in hex with spa
 | 0x01 | **Belief** | Structured belief — (subject, relation, object) triple with confidence and source |
 | 0x02 | **Event** | Timestamped occurrence — message, interaction, or behavioral event |
 | 0x03 | **State** | Agent state snapshot — portable save point |
-| 0x04 | **Workflow** | Learned action sequence — procedural memory |
+| 0x04 | **Workflow** | Directed graph of procedural steps — plans, pipelines, processes |
 | 0x05 | **Action** | Tool invocation or code execution |
 | 0x06 | **Observation** | Raw sensory or cognitive input |
 | 0x07 | **Goal** | Objective with lifecycle semantics |
@@ -469,6 +469,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `invalidation_initiator` | `iinit` | string | DID of the party initiating the invalidation. |
 | `retention_policy` | `rpol` | map | Minimum retention requirements: `{minimum_retention_years: int, regulation: string, deletion_requires: string}`. Distinct from `invalidation_policy` (which controls supersession). |
 | `recall_priority` | `rpri` | string | Retrieval priority hint: `"hot"`, `"warm"`, `"cold"`. Guides index layer storage tier selection. |
+| `embedding_text` | `et` | string | Source text for vector embedding and full-text indexing. When present, implementations SHOULD use this value instead of the grain's default per-type text representation for embedding generation and search indexing. Complements `embedding_refs` (which records generated vectors) by specifying the input text. Implementations MAY impose a size limit (RECOMMENDED: 8192 bytes). |
 
 > **Note — `source_type` for Observation grains:** Use `"sensor"` when `observer_type` is a physical instrument; `"agent_inferred"` when `observer_type` is a cognitive AI observer (`"llm"`, `"reflector"`, `"classifier"`, `"detector"`); `"user_explicit"` for human observers.
 
@@ -497,10 +498,22 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 
 ### 6.4 Workflow-Specific Fields
 
+| Full Name | Short Key | Type | Notes |
+|-----------|-----------|------|-------|
+| `trigger` | `trigger` | string | Activation condition |
+| `nodes` | `nodes` | array[string] | Graph node IDs/labels |
+| `edges` | `edges` | array[map] | Directed edges (see §8.4 edge schema) |
+| `bindings` | `bind` | map[string→string] | Node ID → Action definition grain hash |
+| `retries` | `retries` | map[string→int] | Node ID → max repeat count |
+
+**Edge nested field compaction:**
+
 | Full Name | Short Key | Type |
 |-----------|-----------|------|
-| `steps` | `steps` | array[string] |
-| `trigger` | `trigger` | string |
+| `src` | `src` | string |
+| `dst` | `dst` | string |
+| `cond` | `cond` | string |
+| `max_cycles` | `mxc` | int |
 
 ### 6.5 Action-Specific Fields
 
@@ -729,7 +742,7 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:infers` | Reasoning | Derived conclusion from prior grains |
 | `mg:agrees_with` | Consensus | Multi-agent threshold agreement |
 | `mg:state_at` | State | Agent state snapshot |
-| `mg:requires_steps` | Workflow | Learned action sequence |
+| `mg:has_graph` | Workflow | Directed graph of procedural steps |
 | `mg:intends` | Goal | Agent objective |
 | `mg:permits` | Consent | User grants agent right to retain or act |
 | `mg:revokes` | Consent | User revokes prior consent |
@@ -743,6 +756,7 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:handed_off_to` | Event | Session handoff event record (§28.7) |
 | `mg:depends_on` | Goal | Task dependency (distinct from `parent_goals` hierarchy) |
 | `mg:assigned_to` | Goal | Task assigned to agent for execution |
+| `mg:capable_of` | Belief | Learned skill with proficiency and strategies (§28.8 Skill Convention) |
 
 ### 8.1 Belief (type = 0x01)
 
@@ -784,15 +798,116 @@ An agent state snapshot — the portable save point at a moment in time.
 
 ### 8.4 Workflow (type = 0x04)
 
-Learned action sequence — procedural memory for recurring tasks.
+Directed graph of procedural steps — plans, pipelines, and multi-path processes.
 
 **Required fields:**
 - `type` = "workflow"
-- `steps` (non-empty array[string]) — ordered action steps
-- `trigger` (non-empty string) — condition that activates this workflow
+- `nodes` (non-empty array[string]) — graph node identifiers. Each string serves as both ID and human-readable label. Must be unique within the grain.
 - `created_at` (int64, epoch ms)
 
-**Optional fields:** All common fields.
+**Optional fields:**
+- `trigger` (string) — condition that activates this workflow
+- `edges` (array[map]) — directed edges between nodes (see edge schema below). When absent, nodes are unconnected.
+- `bindings` (map[string→string]) — maps node IDs to Action definition grain hashes (`action_phase: "definition"`). Unbound nodes are resolved by convention (tool name match) or treated as abstract steps.
+- `retries` (map[string→int]) — maps node IDs to maximum repeat count on failure. Absent means no retry.
+- All common fields.
+
+**Edge schema** (each element of `edges`):
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `src` | string | yes | ID of the source node (must exist in `nodes`) |
+| `dst` | string | yes | ID of the target node (must exist in `nodes`) |
+| `cond` | string | no | Opaque condition string; absent means unconditional |
+| `max_cycles` | int | no | Maximum traversal count for back-edges; absent means unlimited |
+
+**Structural semantics** (inferred from graph topology, not declared):
+- A node with multiple outgoing unconditional edges implies **parallel fan-out** (fork).
+- A node that is the target of multiple edges implies an **AND-join** (all predecessors must complete).
+- A node with multiple outgoing conditional edges (`cond` present) implies a **decision point**.
+- A node with no outgoing edges is a **terminal node**.
+- The **entry point** is the first element of `nodes`.
+- Back-edges (forming cycles) are permitted when bounded by `max_cycles` or `retries`.
+
+**Validation constraints:**
+- Every `src` and `dst` in `edges` MUST reference an element of `nodes`.
+- Every key in `bindings` MUST reference an element of `nodes`.
+- Every key in `retries` MUST reference an element of `nodes`.
+- Node IDs MUST be unique within `nodes`.
+- Unbounded cycles (back-edge without `max_cycles`, and no entry in `retries` for the target node) SHOULD be rejected by implementations.
+
+**Node-to-Action binding** (three-tier resolution):
+
+| Tier | Condition | Resolution |
+|------|-----------|------------|
+| Bound | Node ID present in `bindings` | Fetch the Action definition grain by hash; use its `tool_name`, `input_schema`, `output_schema` |
+| Named | No binding, but an Action definition grain exists with matching `tool_name` | Resolve by convention (implementation-defined lookup) |
+| Abstract | No binding, no matching tool | Node label is a human-readable instruction; executor (LLM or agent) interprets it |
+
+**Execution record relation:** When an agent executes a workflow node, it creates an Action grain (phase: complete or call/result) with a relation of type `mg:step_action:<node_id>` targeting the Workflow grain hash. This links execution records to the plan without modifying the immutable Workflow grain.
+
+**Example — linear pipeline:**
+
+```json
+{
+  "type": "workflow",
+  "trigger": "merge to main",
+  "nodes": ["build", "test", "deploy"],
+  "edges": [
+    {"src": "build", "dst": "test"},
+    {"src": "test", "dst": "deploy"}
+  ],
+  "created_at": 1711324800000
+}
+```
+
+**Example — parallel fork/join:**
+
+```json
+{
+  "type": "workflow",
+  "trigger": "PR opened",
+  "nodes": ["lint", "security", "compliance", "evaluate"],
+  "edges": [
+    {"src": "lint", "dst": "security"},
+    {"src": "lint", "dst": "compliance"},
+    {"src": "security", "dst": "evaluate"},
+    {"src": "compliance", "dst": "evaluate"}
+  ],
+  "created_at": 1711324800000
+}
+```
+
+**Example — conditional branching with retry and bindings:**
+
+```json
+{
+  "type": "workflow",
+  "trigger": "release requested",
+  "nodes": ["build", "unit_test", "lint", "integration_test", "stage_deploy", "approval", "prod_deploy", "rollback", "notify"],
+  "edges": [
+    {"src": "build", "dst": "unit_test"},
+    {"src": "build", "dst": "lint"},
+    {"src": "unit_test", "dst": "integration_test"},
+    {"src": "lint", "dst": "integration_test"},
+    {"src": "integration_test", "dst": "stage_deploy"},
+    {"src": "stage_deploy", "dst": "approval"},
+    {"src": "approval", "dst": "prod_deploy", "cond": "approved"},
+    {"src": "approval", "dst": "rollback", "cond": "rejected"},
+    {"src": "prod_deploy", "dst": "notify"},
+    {"src": "rollback", "dst": "notify"}
+  ],
+  "bindings": {
+    "build": "sha256:def111...",
+    "stage_deploy": "sha256:def333...",
+    "prod_deploy": "sha256:def444..."
+  },
+  "retries": {
+    "stage_deploy": 3
+  },
+  "created_at": 1711324800000
+}
+```
 
 ### 8.5 Action (type = 0x05)
 
@@ -2797,7 +2912,96 @@ When Agent A transfers control of a conversation to Agent B, the handoff is reco
 3. Agent B ingests the referenced grains, validates the delegation scope, and continues with a new `run_id` but the same `session_id`.
 4. When Agent B completes its task, it writes a Goal grain with `goal_state: "satisfied"` linked via `derived_from` to the delegation grain, and control returns to the agent specified in `return_to`.
 
-### 28.8 CAL and SML — Companion Query and Markup Languages
+### 28.8 Skill Convention
+
+Agents that learn reusable capabilities SHOULD represent them as Belief grains with `relation: "mg:capable_of"` and a structured `object` map. A skill grain captures what an agent can do, how well it can do it, and the procedural knowledge needed to transfer the capability to another agent.
+
+**Distinction from related constructs:**
+
+| Construct | Grain type | What it captures |
+|---|---|---|
+| Agent Capability (§28.5) | Belief (`mg:has_capability`) | Static identity card — what the agent *is built to do* |
+| Skill (§28.8) | Belief (`mg:capable_of`) | Learned capability — what the agent *has learned to do*, with proficiency and strategies |
+| Workflow (§8.4) | Workflow | Fixed action sequence — a single procedure, not an adaptive capability |
+
+**Convention:**
+```json
+{
+  "type": "belief",
+  "subject": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+  "relation": "mg:capable_of",
+  "object": {
+    "name": "code_review",
+    "description": "Review code changes for correctness, style, and security issues",
+    "proficiency": 0.82,
+    "strategies": [
+      {
+        "condition": "security_focused",
+        "workflow": "mg:sha256:a1b2c3...",
+        "description": "OWASP-oriented review for auth and input handling code"
+      },
+      {
+        "condition": "style_focused",
+        "workflow": "mg:sha256:d4e5f6...",
+        "description": "Linting and convention compliance review"
+      }
+    ],
+    "prerequisites": ["mg:sha256:f7e8d9..."],
+    "practice_count": 47,
+    "last_practiced_at": 1711929600000,
+    "transferable": true
+  },
+  "confidence": 0.82,
+  "source_type": "agent_inferred",
+  "namespace": "agent:skills",
+  "author_did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+  "related_to": [
+    {"target": "mg:sha256:a1b2c3...", "type": "elaborates"},
+    {"target": "mg:sha256:d4e5f6...", "type": "elaborates"}
+  ]
+}
+```
+
+The `object` map is an open schema. Standard keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `name` | string | Machine-readable skill identifier |
+| `description` | string | Human-readable summary of what the skill enables |
+| `proficiency` | float64, [0.0, 1.0] | Current mastery level. SHOULD equal the grain's top-level `confidence`. |
+| `strategies` | array[map] | Context-dependent approaches. Each entry: `{condition: string, workflow: string, description?: string}`. The `workflow` value is a content address of a Workflow grain (§8.4). |
+| `prerequisites` | array[string] | Content addresses of Skill Belief grains that must be acquired before this skill is effective |
+| `practice_count` | int | Number of successful applications (mirrors `success_count` in core fields) |
+| `last_practiced_at` | int64 | Epoch ms of most recent successful application |
+| `transferable` | bool | If `true`, another agent MAY ingest this grain and its referenced Workflow grains to acquire the skill |
+| `input_modalities` | array[string] | What the skill operates on: `"text"`, `"image"`, `"code"`, `"audio"`. Open enum. |
+| `output_modalities` | array[string] | What the skill produces |
+| `domain` | string | Domain context: `"software"`, `"research"`, `"healthcare"`, `"finance"`. Open enum. |
+
+**Namespace:** Skill Belief grains SHOULD use the `"agent:skills"` namespace to enable efficient discovery queries.
+
+**Proficiency lifecycle:**
+
+1. **Acquisition.** When an agent first learns a capability, it writes a Skill Belief grain with an initial `proficiency` (typically low). The `derived_from` field SHOULD reference the grains (Events, Actions, Reasoning) that contributed to learning.
+2. **Improvement.** Each time proficiency changes, the agent supersedes the previous Skill Belief grain with an updated `proficiency` and incremented `practice_count`. The supersession chain provides a full learning history.
+3. **Degradation.** Implementations MAY decay proficiency over time if `last_practiced_at` exceeds a threshold. This is an index-layer concern, not a grain mutation — the store writes a new superseding grain with reduced proficiency.
+
+**Skill transfer between agents:**
+
+1. Agent A queries its store: `type=belief, relation="mg:capable_of", namespace="agent:skills", transferable=true`.
+2. Agent A shares the Skill Belief grain and all Workflow grains referenced in `strategies` with Agent B (via `get_batch` on the content addresses).
+3. Agent B ingests the grains, rewrites the Skill Belief with its own `author_did`, initial `proficiency: 0.0`, and `practice_count: 0`, and sets `derived_from` to Agent A's original Skill Belief content address. The `origin_did` field preserves Agent A's DID for provenance.
+4. Agent B improves proficiency through practice, superseding the skill grain as described above.
+
+**Skill discovery:**
+
+Agents discover available skills by querying: `type=belief, relation="mg:capable_of", namespace="agent:skills", system_valid_to=null, sort=proficiency DESC`.
+
+To find agents capable of a specific skill: `type=belief, relation="mg:capable_of", object.name="code_review", system_valid_to=null`.
+
+> **Note — promotion path:** If the convention approach proves insufficient — for instance, if skill queries become performance-critical across large multi-agent deployments, or if multiple domain profiles independently require skill-specific fields at the type level — a dedicated Skill grain type (`0x0B`) with its own required fields and type byte MAY be introduced in a future OMS version, following the precedent set by Consent (§8.10).
+
+### 28.9 CAL and SML — Companion Query and Markup Languages
 
 The query conventions in this section (§28.1–§28.7) define OMS store operations and response envelopes at the structural level. The **Context Assembly Language (CAL)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) is the companion specification that provides a formal, deterministic syntax for invoking these operations from an agent or LLM.
 
@@ -3160,6 +3364,7 @@ footer        = 32OCTET  ; SHA-256 checksum
   "iinit": "invalidation_initiator",
   "rpol": "retention_policy",
   "rpri": "recall_priority",
+  "et": "embedding_text",
   "scope": "scope",
   "isw": "is_withdrawal",
   "basis": "basis",
@@ -3384,7 +3589,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 - **Belief:** Grain type 0x01 — a held claim, factual statement, or declarative knowledge about the world
 - **Event:** Grain type 0x02 — a discrete occurrence with start/end time
 - **State:** Grain type 0x03 — a persisting condition or status at a point in time
-- **Workflow:** Grain type 0x04 — a structured process or multi-step plan
+- **Workflow:** Grain type 0x04 — a directed graph of procedural steps, supporting sequential, conditional, parallel, and cyclic execution paths
 - **Action:** Grain type 0x05 — a completed tool invocation, API call, or agent action
 - **Observation:** Grain type 0x06 — a raw sensor or environmental reading without interpretation
 - **Goal:** Grain type 0x07 — a desired future state or objective
