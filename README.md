@@ -1,6 +1,6 @@
 # Open Memory Specification (OMS)
 
-**Version:** 1.3 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
+**Version:** 1.4 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
 
 Backed by [areev.ai](https://areev.ai).
 
@@ -42,7 +42,7 @@ Think of the `.mg` container as what JSON is to APIs or `.git` objects are to ve
 | Event | `0x02` | Timestamped occurrence: message, interaction, or utterance |
 | State | `0x03` | Agent state snapshot at a point in time |
 | Workflow | `0x04` | Directed graph of procedural steps |
-| Action | `0x05` | Tool invocation or code execution |
+| Tool | `0x05` | Tool invocation or code execution |
 | Observation | `0x06` | Sensor or cognitive input |
 | Goal | `0x07` | Intent, objective, or desired outcome |
 | Reasoning | `0x08` | Inference chain and thought audit trail |
@@ -122,7 +122,7 @@ CAL/1 ASSEMBLE support_context
     policy:    (RECALL facts
                 WHERE tags INCLUDE ["policy:billing"]
                 LIMIT 5),
-    session:   (RECALL actions
+    session:   (RECALL tools
                 WHERE session_id = "sess-20260303-priya"
                 LIMIT 10)
   BUDGET 4000 tokens
@@ -166,7 +166,7 @@ SML is **not XML**. It requires no parser, no schema, no escape sequences. An LL
 
 ### Structural Rules
 
-1. **Tag names are grain types.** `<fact>`, `<goal>`, `<event>`, `<action>`, `<observation>`, `<reasoning>`, `<state>`, `<workflow>`, `<consensus>`, `<consent>` — no others.
+1. **Tag names are grain types.** `<fact>`, `<goal>`, `<event>`, `<tool>`, `<observation>`, `<reasoning>`, `<state>`, `<workflow>`, `<consensus>`, `<consent>` — no others.
 2. **Flat only.** No nesting beyond the `<context>` envelope.
 3. **No storage internals.** No hashes, namespaces, or OMS metadata in the output.
 4. **Natural language content.** Element text is prose, not decomposed triples.
@@ -190,8 +190,8 @@ This is the SML block injected into the LLM system prompt for the billing disput
 
   <workflow trigger="billing_dispute_opened" state="open">verify_charge -> check_renewal_date -> explain_or_escalate -> offer_billing_cycle_change -> close_ticket</workflow>
 
-  <action tool="get_invoice"    phase="completed">retrieved invoice INV-2026-02-28: $299 annual Professional plan renewal</action>
-  <action tool="get_plan_history" phase="completed">plan enrolled 2024-03-01, renewed annually; last renewal 2026-02-28</action>
+  <tool tool="get_invoice"    phase="completed">retrieved invoice INV-2026-02-28: $299 annual Professional plan renewal</tool>
+  <tool tool="get_plan_history" phase="completed">plan enrolled 2024-03-01, renewed annually; last renewal 2026-02-28</tool>
 
   <observation observer="billing-system">renewal processed automatically on 2026-02-28 at 00:01 UTC; no failed payment</observation>
   <observation observer="system">customer last viewed billing page 2026-01-15</observation>

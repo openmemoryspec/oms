@@ -1,7 +1,7 @@
 # CAL (Context Assembly Language) Specification v1.0
 
 **Status:** Standards Track | **Date:** 2026-03-05 | **Version:** 1.1 | **Classification:** Experimental
-**Part of:** [Open Memory Specification (OMS) v1.3](./SPECIFICATION.md)
+**Part of:** [Open Memory Specification (OMS) v1.4](./SPECIFICATION.md)
 ---
 
 ## Table of Contents
@@ -118,7 +118,7 @@ The line between Tier 0/1 (in CAL) and Tier 2 (not in CAL) is: **can the operati
 
 ### 1.5 Relationship to OMS
 
-CAL operates on the 10 grain types defined by OMS v1.3: Belief, Event, State, Workflow, Action, Observation, Goal, Reasoning, Consensus, Consent. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
+CAL operates on the 10 grain types defined by OMS v1.4: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
 
 CAL extends the Store Protocol Convention defined in OMS §28.4 ([SPECIFICATION.md](./SPECIFICATION.md)) with a formal query language. Where OMS defines the `query`, `search`, and `supersede` store operations, CAL provides a structured, deterministic syntax for invoking them safely.
 
@@ -236,7 +236,7 @@ recall_priority, epistemic_status
 role, session_id, parent_message_id, model_id, content,
 context, plan,
 trigger, nodes, edges, bindings, retries,
-tool_name, action_phase, is_error, tool_call_id,
+tool_name, tool_phase, is_error, tool_call_id,
 observer_id, observer_type,
 goal_state, assigned_agent, deadline, depends_on,
 reasoning_type, premises, conclusion,
@@ -410,7 +410,7 @@ grain_field_name = event_field | state_field | workflow_field
 event_field     = "role" | "session_id" | "parent_message_id" | "model_id" | "content" ;
 state_field     = "context" | "plan" ;
 workflow_field  = "trigger" | "node" | "binding" ;
-action_field    = "tool_name" | "action_phase" | "is_error" | "tool_call_id" ;
+action_field    = "tool_name" | "tool_phase" | "is_error" | "tool_call_id" ;
 observation_field = "observer_id" | "observer_type" ;
 goal_field      = "goal_state" | "assigned_agent" | "deadline" | "depends_on" ;
 reasoning_field = "reasoning_type" | "premises" | "conclusion" ;
@@ -530,7 +530,7 @@ positive_integer = digit+ ;
 grain_type_plural   = "beliefs" | "events" | "states" | "workflows" | "actions"
                     | "observations" | "goals" | "reasonings" | "consensuses" | "consents" ;
 
-grain_type_singular = "belief" | "event" | "state" | "workflow" | "action"
+grain_type_singular = "fact" | "event" | "state" | "workflow" | "tool"
                     | "observation" | "goal" | "reasoning" | "consensus" | "consent" ;
 ```
 
@@ -542,11 +542,11 @@ grain_type_singular = "belief" | "event" | "state" | "workflow" | "action"
 
 | Type | Plural (after RECALL) | Singular (in ADD/WHERE) | OMS Type Code |
 |------|----------------------|------------------------|---------------|
-| Belief | `beliefs` | `belief` | 0x01 |
+| Fact | `facts` | `fact` | 0x01 |
 | Event | `events` | `event` | 0x02 |
 | State | `states` | `state` | 0x03 |
 | Workflow | `workflows` | `workflow` | 0x04 |
-| Action | `actions` | `action` | 0x05 |
+| Tool | `tools` | `tool` | 0x05 |
 | Observation | `observations` | `observation` | 0x06 |
 | Goal | `goals` | `goal` | 0x07 |
 | Reasoning | `reasonings` | `reasoning` | 0x08 |
@@ -610,7 +610,7 @@ Missing field = no match (never errors). `WHERE confidence >= 0.8` on a grain wi
 
 ### 6.1 Design Principle
 
-When a `RECALL` statement specifies a grain type (e.g., `RECALL actions`), the parser unlocks a **type-specific field set** for use in `WHERE` clauses. This enables precise querying of OMS-native fields that only exist on specific grain types, without polluting the global field namespace.
+When a `RECALL` statement specifies a grain type (e.g., `RECALL tools`), the parser unlocks a **type-specific field set** for use in `WHERE` clauses. This enables precise querying of OMS-native fields that only exist on specific grain types, without polluting the global field namespace.
 
 The type-specific field set is a **compile-time guarantee**: the parser MUST reject field references that do not belong to the specified grain type. When no grain type is specified (`RECALL WHERE ...`), only the common field set is available.
 
@@ -623,9 +623,9 @@ The type-specific field set is a **compile-time guarantee**: the parser MUST rej
 
 ### 6.3 Grain-Type-Specific Queryable Fields
 
-#### Belief (0x01) -- `RECALL beliefs`
+#### Fact (0x01) -- `RECALL facts`
 
-All Belief fields are in the common set (`subject`, `relation`, `object`, `confidence`). No additional type-specific fields.
+All Fact fields are in the common set (`subject`, `relation`, `object`, `confidence`). No additional type-specific fields.
 
 #### Event (0x02) -- `RECALL events`
 
@@ -650,16 +650,16 @@ All Belief fields are in the common set (`subject`, `relation`, `object`, `confi
 |-------|------|-----------|-------|
 | `trigger` | String | `=`, `!=` | Trigger condition (e.g., `"on:merge_to_main"`) |
 | `node` | String | `=` | Match workflows containing a specific node |
-| `binding` | String | `=` | Match workflows binding to a specific Action grain hash |
+| `binding` | String | `=` | Match workflows binding to a specific Tool grain hash |
 
-#### Action (0x05) -- `RECALL actions`
+#### Tool (0x05) -- `RECALL tools`
 
 | Field | Type | Operators | Notes |
 |-------|------|-----------|-------|
 | `tool_name` | String | `=`, `!=`, `IN` | Tool identifier |
-| `action_phase` | String | `=` | `"definition"`, `"call"`, `"result"`, `"complete"` |
-| `is_error` | Boolean | `=` | Whether the action resulted in error |
-| `tool_call_id` | String | `=` | Correlation ID across action phases |
+| `tool_phase` | String | `=` | `"definition"`, `"call"`, `"result"`, `"complete"` |
+| `is_error` | Boolean | `=` | Whether the tool resulted in error |
+| `tool_call_id` | String | `=` | Correlation ID across tool phases |
 
 #### Observation (0x06) -- `RECALL observations`
 
@@ -733,11 +733,11 @@ ADD observation
 
 | Grain Type | Common Fields | Type-Specific Fields | Total Queryable |
 |-----------|--------------|---------------------|----------------|
-| Belief | 18 | 0 | 18 |
+| Fact | 18 | 0 | 18 |
 | Event | 18 | 5 | 23 |
 | State | 18 | 2 | 20 |
 | Workflow | 18 | 2 | 20 |
-| Action | 18 | 4 | 22 |
+| Tool | 18 | 4 | 22 |
 | Observation | 18 | 2 | 20 |
 | Goal | 18 | 4 | 22 |
 | Reasoning | 18 | 3 | 21 |
@@ -795,7 +795,7 @@ CAL defines **relation category shortcuts** as syntactic sugar for common multi-
 
 ```sql
 -- All preference-related beliefs about alice
-RECALL beliefs WHERE subject = "alice" AND relation IS PREFERENCE
+RECALL facts WHERE subject = "alice" AND relation IS PREFERENCE
   ORDER BY confidence DESC
 
 -- All permission records for a DID
@@ -832,7 +832,7 @@ CAL/1 has **12 statement types** organized into three tiers:
 Retrieves grains matching the given filters. Returns results using the OMS Standard Search Response Envelope.
 
 ```sql
-RECALL beliefs WHERE subject = "alice" AND relation = "prefers"
+RECALL facts WHERE subject = "alice" AND relation = "prefers"
   WITH contradiction_detection
   ORDER BY confidence DESC
   LIMIT 10
@@ -842,11 +842,11 @@ RECALL supports semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIO
 
 ```sql
 -- With grain-type-specific fields
-RECALL actions WHERE tool_name = "get_weather" AND is_error = false
+RECALL tools WHERE tool_name = "get_weather" AND is_error = false
   ORDER BY time DESC LIMIT 20
 
 -- With domain profile fields
-RECALL beliefs WHERE tags INCLUDE ["profile:healthcare"]
+RECALL facts WHERE tags INCLUDE ["profile:healthcare"]
   AND hc:patient_id = "P-12345" AND relation = "mg:knows"
 ```
 
@@ -871,10 +871,10 @@ The flagship new statement. Composes a context block from multiple RECALL source
 CAL/1 ASSEMBLE user_context
   FOR "conversation about alice's preferences and goals"
   FROM
-    beliefs:  (RECALL beliefs ABOUT "alice" WHERE relation = "prefers" LIMIT 20),
+    beliefs:  (RECALL facts ABOUT "alice" WHERE relation = "prefers" LIMIT 20),
     goals:    (RECALL goals ABOUT "alice" RECENT 10),
     events:   (RECALL events WHERE user_id = "alice" RECENT 5),
-    history:  (RECALL beliefs ABOUT "alice"
+    history:  (RECALL facts ABOUT "alice"
                 WHERE relation = "prefers" WITH superseded
                 ORDER BY time DESC LIMIT 3)
   BUDGET 2000 tokens
@@ -943,10 +943,10 @@ HISTORY sha256:aaa... DIFF sha256:bbb...
 Returns the execution plan without running the query. Works with all statement types including ASSEMBLE.
 
 ```sql
-EXPLAIN RECALL beliefs WHERE query = "alice preferences" LIMIT 10
+EXPLAIN RECALL facts WHERE query = "alice preferences" LIMIT 10
 EXPLAIN ASSEMBLE user_context
   FOR "conversation about alice"
-  FROM beliefs: (RECALL beliefs ABOUT "alice"),
+  FROM beliefs: (RECALL facts ABOUT "alice"),
        goals: (RECALL goals ABOUT "alice" RECENT 5)
   BUDGET 2000 tokens
 ```
@@ -958,7 +958,7 @@ Schema introspection for grain types, fields, capabilities, server metadata, tem
 ```sql
 CAL/1 DESCRIBE grain_types        -- list available grain types
 CAL/1 DESCRIBE fields             -- list all queryable fields
-CAL/1 DESCRIBE fields belief      -- list fields for a specific grain type
+CAL/1 DESCRIBE fields fact      -- list fields for a specific grain type
 CAL/1 DESCRIBE capabilities       -- server capabilities and conformance
 CAL/1 DESCRIBE server             -- server metadata
 CAL/1 DESCRIBE templates          -- list registered templates
@@ -971,9 +971,9 @@ Multiple independent queries in a single request. Each sub-query gets its own re
 
 ```sql
 CAL/1 BATCH {
-  preferences: RECALL beliefs ABOUT "alice" WHERE relation = "prefers",
+  preferences: RECALL facts ABOUT "alice" WHERE relation = "prefers",
   recent:      RECALL events ABOUT "alice" RECENT 5,
-  team:        RECALL beliefs WHERE relation = "member_of" AND object = "team-alpha"
+  team:        RECALL facts WHERE relation = "member_of" AND object = "team-alpha"
 }
 ```
 
@@ -984,7 +984,7 @@ CAL/1 BATCH {
 Creates a **new** grain. Pure append-only -- does not modify or reference any existing grain.
 
 ```sql
-ADD belief
+ADD fact
   SET subject = "alice"
   SET relation = "prefers"
   SET object = "dark mode"
@@ -993,9 +993,9 @@ ADD belief
   REASON "user stated preference during onboarding conversation"
 ```
 
-**Addable grain types:** Belief, Observation, Goal, Workflow. Events, Actions, States, and other types represent system-generated records and are not user-creatable.
+**Addable grain types:** Fact, Observation, Goal, Workflow. Events, Tools, States, and other types represent system-generated records and are not user-creatable.
 
-**Required SET fields (Belief):** `subject`, `relation`, `object`. `REASON` is mandatory.
+**Required SET fields (Fact):** `subject`, `relation`, `object`. `REASON` is mandatory.
 
 #### 8.8.1 ADD Workflow (Graph Syntax)
 
@@ -1058,7 +1058,7 @@ ADD workflow "release pipeline"
 
 **Structural inference:** Node types are inferred from graph topology — a node with multiple unconditional outgoing edges is a fork, a node receiving multiple edges is an AND-join, a node with `WHEN` edges is a decision point.
 
-**BIND clause:** Maps a node name to an Action definition grain hash (`action_phase: "definition"`). The executor fetches the definition to discover `tool_name`, `input_schema`, etc. Unbound nodes are resolved by name convention or treated as abstract steps.
+**BIND clause:** Maps a node name to an Tool definition grain hash (`tool_phase: "definition"`). The executor fetches the definition to discover `tool_name`, `input_schema`, etc. Unbound nodes are resolved by name convention or treated as abstract steps.
 
 **Node names:** Bare identifiers (`build`, `unit_test`) or quoted strings (`"send welcome email"`). Reserved words (`ADD`, `workflow`, `ON`, `WHEN`, `BIND`, `REASON`, `BECAUSE`) must be quoted.
 
@@ -1073,7 +1073,7 @@ SUPERSEDE sha256:target_hash
   REASON "user explicitly changed preference"
 ```
 
-**Belief supersession:** At least one `SET` clause and `REASON` are required.
+**Fact supersession:** At least one `SET` clause and `REASON` are required.
 
 **Workflow supersession:** Uses graph syntax (full graph replacement):
 
@@ -1117,10 +1117,10 @@ LET bindings name intermediate RECALL results that can be referenced by `$name` 
 
 ```sql
 CAL/1
-LET $team_members = RECALL beliefs
+LET $team_members = RECALL facts
   WHERE relation = "member_of" AND object = "team-alpha" SUBJECTS;
 
-LET $team_prefs = RECALL beliefs
+LET $team_prefs = RECALL facts
   WHERE subject IN ($team_members) AND relation = "prefers";
 
 ASSEMBLE team_context
@@ -1145,10 +1145,10 @@ Evaluates argument queries left-to-right. Returns the result of the **first quer
 
 ```sql
 COALESCE(
-  RECALL beliefs WHERE subject = "alice" AND relation = "favorite_color",
-  RECALL beliefs WHERE subject = "alice" AND relation = "prefers"
+  RECALL facts WHERE subject = "alice" AND relation = "favorite_color",
+  RECALL facts WHERE subject = "alice" AND relation = "prefers"
     AND tags INCLUDE ["color"],
-  RECALL beliefs ABOUT "alice" LIKE "color preference"
+  RECALL facts ABOUT "alice" LIKE "color preference"
 )
 ```
 
@@ -1163,9 +1163,9 @@ Shortcuts are **syntactic sugar** -- they desugar to standard WHERE/pipeline cla
 ### 9.1 ABOUT
 
 ```sql
-RECALL beliefs ABOUT "alice"
--- Desugars to: RECALL beliefs WHERE subject = "alice"
--- Falls back to: RECALL beliefs WHERE query = "alice" (if no structural match)
+RECALL facts ABOUT "alice"
+-- Desugars to: RECALL facts WHERE subject = "alice"
+-- Falls back to: RECALL facts WHERE query = "alice" (if no structural match)
 ```
 
 ### 9.2 RECENT
@@ -1193,14 +1193,14 @@ RECALL LIKE "machine learning best practices"
 
 ```sql
 RECALL MY beliefs
--- Desugars to: RECALL beliefs WHERE user_id = $current_user_id
+-- Desugars to: RECALL facts WHERE user_id = $current_user_id
 ```
 
 ### 9.6 CONTRADICTIONS
 
 ```sql
-RECALL beliefs ABOUT "alice" CONTRADICTIONS
--- Desugars to: RECALL beliefs WHERE subject = "alice" AND contradicted = true
+RECALL facts ABOUT "alice" CONTRADICTIONS
+-- Desugars to: RECALL facts WHERE subject = "alice" AND contradicted = true
 --              WITH contradiction_detection
 ```
 
@@ -1248,15 +1248,15 @@ The `FORMAT` and `AS` clauses accept either a single format name or a bracketed 
 **Single format** (existing behavior):
 
 ```
-CAL/1 RECALL beliefs ABOUT "alice" FORMAT markdown
-CAL/1 RECALL beliefs ABOUT "alice" AS json
+CAL/1 RECALL facts ABOUT "alice" FORMAT markdown
+CAL/1 RECALL facts ABOUT "alice" AS json
 ```
 
 **Multi-format:**
 
 ```
-CAL/1 RECALL beliefs ABOUT "alice" FORMAT [markdown, json]
-CAL/1 RECALL beliefs ABOUT "alice" AS [markdown, json]
+CAL/1 RECALL facts ABOUT "alice" FORMAT [markdown, json]
+CAL/1 RECALL facts ABOUT "alice" AS [markdown, json]
 ```
 
 **Multi-format with aliases:**
@@ -1264,9 +1264,9 @@ CAL/1 RECALL beliefs ABOUT "alice" AS [markdown, json]
 Each format in a bracketed list MAY include an `AS <identifier>` alias. When present, the alias becomes the key in the multi-format response object (Section 14.2.1) instead of the canonical format name. Aliases are particularly useful when the list contains multiple templates (which would otherwise all share the key `"template"`) or when the client wants semantically meaningful keys.
 
 ```
-CAL/1 RECALL beliefs FORMAT [json AS customers, markdown AS report]
-CAL/1 RECALL beliefs FORMAT [json AS structured, TEMPLATE "{{subject}}: {{object}}" AS oneliner]
-CAL/1 RECALL beliefs FORMAT [TEMPLATE "{{subject}}" AS names, TEMPLATE "{{object}}" AS values]
+CAL/1 RECALL facts FORMAT [json AS customers, markdown AS report]
+CAL/1 RECALL facts FORMAT [json AS structured, TEMPLATE "{{subject}}: {{object}}" AS oneliner]
+CAL/1 RECALL facts FORMAT [TEMPLATE "{{subject}}" AS names, TEMPLATE "{{object}}" AS values]
 ```
 
 **Rules:**
@@ -1307,10 +1307,10 @@ Each grain type defines a **content rule** (what becomes the text content of the
 
 | Grain Type | Text Content Rule | Default Attributes |
 |-----------|------------------|-------------------|
-| **Belief** | `humanize(relation) + " " + object` | `subject`, `confidence`? |
+| **Fact** | `humanize(relation) + " " + object` | `subject`, `confidence`? |
 | **Event** | `content` | `role`, `time`? |
 | **Goal** | `object` (the objective description) | `subject`, `state`?, `deadline`? |
-| **Action** | `object` (tool result summary) | `tool`, `phase`? |
+| **Tool** | `object` (tool result summary) | `tool`, `phase`? |
 | **Observation** | `object` (what was observed) | `observer`? |
 | **Reasoning** | `conclusion` | `type`? |
 | **State** | `plan` (summary) | `context`? |
@@ -1350,7 +1350,7 @@ Full ISO 8601 timestamps remain in the machine envelope. Implementations MAY pro
 The `PROJECT` clause overrides default content projection, allowing queries to surface custom or domain-specific fields:
 
 ```sql
-CAL/1 RECALL beliefs ABOUT "alice"
+CAL/1 RECALL facts ABOUT "alice"
   PROJECT content(relation, object), attr(confidence, x_department)
   LIMIT 10 AS sml
 ```
@@ -1463,7 +1463,7 @@ CAL/1 DEFINE TEMPLATE semantic_sml
 ```sql
 CAL/1 ASSEMBLE conversation_context
   FOR "helping alice with her project"
-  FROM beliefs: (RECALL beliefs ABOUT "alice" LIMIT 20),
+  FROM beliefs: (RECALL facts ABOUT "alice" LIMIT 20),
        goals: (RECALL goals ABOUT "alice" RECENT 5)
   BUDGET 3000 tokens
   FORMAT TEMPLATE semantic_sml
@@ -1482,9 +1482,9 @@ FORMAT TEMPLATE {
 ```sml
 <context intent="helping alice prepare her Q1 engineering review">
 
-  <belief subject="alice" confidence="0.95">prefers dark mode in all tools</belief>
-  <belief subject="alice" confidence="0.88">requires keyboard shortcuts for productivity</belief>
-  <belief subject="alice" confidence="0.82">works best in deep-focus blocks of 90 minutes</belief>
+  <fact subject="alice" confidence="0.95">prefers dark mode in all tools</fact>
+  <fact subject="alice" confidence="0.88">requires keyboard shortcuts for productivity</fact>
+  <fact subject="alice" confidence="0.82">works best in deep-focus blocks of 90 minutes</fact>
 
   <goal subject="alice" state="active" deadline="2026-03-15">complete Q1 engineering review presentation</goal>
   <goal subject="alice" state="active">reduce P0 incident rate by 20% in Q2</goal>
@@ -1493,8 +1493,8 @@ FORMAT TEMPLATE {
   <event role="assistant" time="10m ago">Sure — retrieving deployment counts, incident data, and velocity now.</event>
   <event role="user" time="8m ago">Focus on the reliability numbers first.</event>
 
-  <action tool="query_metrics" phase="completed">retrieved 47 deployments and 3 P0 incidents for Q1 2026</action>
-  <action tool="search_docs" phase="completed">found Q1 review template in confluence/engineering/reviews</action>
+  <tool tool="query_metrics" phase="completed">retrieved 47 deployments and 3 P0 incidents for Q1 2026</tool>
+  <tool tool="search_docs" phase="completed">found Q1 review template in confluence/engineering/reviews</tool>
 
   <observation observer="system">alice opened incident-dashboard at 09:14 UTC</observation>
   <observation observer="system" source="calendar">Q1 review presentation scheduled for 2026-03-15 14:00 UTC</observation>
@@ -1556,7 +1556,7 @@ TOON is complementary to SML, not a replacement:
 
 | Property | SML | TOON |
 |----------|-----|------|
-| Semantic tag names | Yes (`<belief>`, `<goal>`, …) | No — grain type in section header only |
+| Semantic tag names | Yes (`<fact>`, `<goal>`, …) | No — grain type in section header only |
 | Token efficiency | Moderate | High (~40% fewer vs JSON) |
 | Uniform arrays | One element per line | CSV table — optimal |
 | Mixed grain types | Natural (each type has its own tag) | Grouped sections |
@@ -1612,7 +1612,7 @@ Where:
 At `summary` disclosure, `confidence`, `state`, `phase`, and `type` columns are omitted.
 At `full` disclosure, additional columns `source` and `observed` are appended.
 
-**Example — `RECALL beliefs ABOUT "alice" LIMIT 3 AS toon`:**
+**Example — `RECALL facts ABOUT "alice" LIMIT 3 AS toon`:**
 ```
 beliefs[3]{subject,content,confidence}:
 alice,prefers dark mode,0.95
@@ -1753,7 +1753,7 @@ assembly_started
 
 ```sql
 ASSEMBLE user_context
-  FROM beliefs: (RECALL beliefs ABOUT "alice")
+  FROM beliefs: (RECALL facts ABOUT "alice")
   BUDGET 2000 tokens
   STREAM { all }                              -- all events
   -- or: STREAM { progress, chunks }          -- specific events
@@ -1852,7 +1852,7 @@ OMS defines domain profiles (healthcare, legal, finance, robotics, science, cons
 
 ```sql
 RECALL WHERE tags INCLUDE ["profile:healthcare"]
-RECALL beliefs WHERE tags INCLUDE ["profile:healthcare"]
+RECALL facts WHERE tags INCLUDE ["profile:healthcare"]
   AND subject = "patient:P-12345" AND relation IS PREFERENCE
 ```
 
@@ -1872,7 +1872,7 @@ Domain-specific fields use OMS domain prefix convention:
 
 **Example:**
 ```sql
-RECALL beliefs WHERE tags INCLUDE ["profile:healthcare"]
+RECALL facts WHERE tags INCLUDE ["profile:healthcare"]
   AND hc:patient_id = "P-12345"
   AND hc:condition_code IN ("J06.9", "J20.9")
   AND relation = "mg:knows"
@@ -1936,8 +1936,8 @@ A formatted representation for direct insertion into LLM context windows. The co
 ```sml
 <context intent="helping alice with project">
 
-  <belief subject="alice" confidence="0.92">prefers dark mode</belief>
-  <belief subject="alice" confidence="0.88">requires keyboard shortcuts</belief>
+  <fact subject="alice" confidence="0.92">prefers dark mode</fact>
+  <fact subject="alice" confidence="0.88">requires keyboard shortcuts</fact>
 
   <goal subject="alice" state="active">complete Q1 review</goal>
 
@@ -1948,7 +1948,7 @@ A formatted representation for direct insertion into LLM context windows. The co
 ```markdown
 ## Context: helping alice with project
 
-**Beliefs**
+**Facts**
 - alice prefers dark mode (confidence: 0.92)
 - alice requires keyboard shortcuts (confidence: 0.88)
 
@@ -1958,8 +1958,8 @@ A formatted representation for direct insertion into LLM context windows. The co
 
 **Compact format** (for `compact` / `text`):
 ```
-[belief] alice prefers dark mode (0.92)
-[belief] alice requires keyboard shortcuts (0.88)
+[fact] alice prefers dark mode (0.92)
+[fact] alice requires keyboard shortcuts (0.88)
 [goal] alice: complete Q1 review (active)
 ```
 
@@ -1978,7 +1978,7 @@ When the query specifies a format list (`FORMAT [markdown, json]`), the response
     "duration_ms": 38
   },
   "formats": {
-    "markdown": "## Beliefs\n- alice prefers dark mode (confidence: 0.92)\n",
+    "markdown": "## Facts\n- alice prefers dark mode (confidence: 0.92)\n",
     "json": [
       {"subject": "alice", "relation": "prefers", "object": "dark mode", "confidence": 0.92}
     ]
@@ -2020,10 +2020,10 @@ Each grain type projects its fields into a **text content** string and **attribu
 
 | Grain Type | Projected Text Content | Example Output (sml) |
 |-----------|----------------------|---------------------|
-| Belief | `humanize(relation) + " " + object` | `<belief subject="alice" confidence="0.95">prefers dark mode in all tools</belief>` |
+| Fact | `humanize(relation) + " " + object` | `<fact subject="alice" confidence="0.95">prefers dark mode in all tools</fact>` |
 | Event | `content` | `<event role="user" time="10m ago">Can you help me pull together the Q1 metrics?</event>` |
 | Goal | `object` | `<goal subject="alice" state="active" deadline="2026-03-15">complete Q1 engineering review presentation</goal>` |
-| Action | `object` (tool result) | `<action tool="query_metrics" phase="completed">retrieved 47 deployments and 3 P0 incidents for Q1 2026</action>` |
+| Tool | `object` (tool result) | `<tool tool="query_metrics" phase="completed">retrieved 47 deployments and 3 P0 incidents for Q1 2026</tool>` |
 | Observation | `object` | `<observation observer="system">alice opened incident-dashboard at 09:14 UTC</observation>` |
 | Reasoning | `conclusion` | `<reasoning type="deductive">alice is prioritising reliability given 3 P0 incidents; lead with incident reduction narrative</reasoning>` |
 | State | `plan` summary | `<state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>` |
@@ -2050,7 +2050,7 @@ Every valid CAL statement has exactly one representation in each format, and con
 
 **text/cal:**
 ```
-CAL/1 RECALL beliefs ABOUT "alice" WHERE confidence >= 0.8 RECENT 5 AS markdown
+CAL/1 RECALL facts ABOUT "alice" WHERE confidence >= 0.8 RECENT 5 AS markdown
 ```
 
 **application/json+cal:**
@@ -2116,7 +2116,7 @@ Implementations MUST declare cross-lingual capability in `DESCRIBE capabilities`
 Default: Unicode code point order (binary sort). Locale-aware sorting requested via `WITH locale("xx")`:
 
 ```sql
-RECALL beliefs ABOUT "alice" ORDER BY object ASC WITH locale("de")
+RECALL facts ABOUT "alice" ORDER BY object ASC WITH locale("de")
 ```
 
 Locale-aware sorting is optional. Implementations that do not support it MUST ignore the `locale()` option with a warning.
@@ -2247,7 +2247,7 @@ CAL String (ADD, SUPERSEDE, or REVERT)
   "issued_at": 1709337600000,
   "expires_at": 1709337900000,
   "max_uses": 1,
-  "allowed_grain_types": ["belief"],
+  "allowed_grain_types": ["fact"],
   "write_quota_remaining": 10,
   "signature": "hmac-sha256-signature"
 }
@@ -2400,9 +2400,9 @@ Errors are stable across spec versions. Every error MUST include: code, message,
     "code": "CAL-E003",
     "message": "Unknown grain type \"fact\".",
     "position": {"start": 7, "end": 11, "line": 1, "col": 8},
-    "suggestion": "Did you mean \"belief\"? (OMS renamed Fact -> Belief in v1.2)",
-    "example": "RECALL beliefs WHERE subject = \"alice\"",
-    "valid_values": ["belief","event","state","workflow","action","observation","goal","reasoning","consensus","consent"]
+    "suggestion": "Did you mean \"fact\"? (OMS renamed Belief -> Fact in v1.4)",
+    "example": "RECALL facts WHERE subject = \"alice\"",
+    "valid_values": ["fact","event","state","workflow","tool","observation","goal","reasoning","consensus","consent"]
   }
 }
 ```
@@ -2615,7 +2615,7 @@ It can read, assemble, and evolve memories, but never delete them.
   time BETWEEN epoch1 AND epoch2  -- epoch range
   confidence >= 0.8               -- min confidence
   tags INCLUDE ["tag1"]           -- required tags
-  type = "belief"                 -- grain type
+  type = "fact"                 -- grain type
 
 ### Shortcuts: ABOUT, RECENT n, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN
 
@@ -2638,7 +2638,7 @@ It can read, assemble, and evolve memories, but never delete them.
   FORMAT [TEMPLATE "{{subject}}" AS names, TEMPLATE "{{object}}" AS values]
 
 ### Output formats:
-  sml (default structured): flat tag-based — <belief subject="alice" confidence="0.92">prefers dark mode</belief>
+  sml (default structured): flat tag-based — <fact subject="alice" confidence="0.92">prefers dark mode</fact>
   toon: CSV-tabular, ~40% fewer tokens — beliefs[3]{subject,content,confidence}:\nalice,prefers dark mode,0.95
   markdown: human-readable prose
   json: machine-readable structured data
@@ -2712,7 +2712,7 @@ All error codes use the `CAL-E` prefix.
 |------|-------------|
 | CAL-E020 | Incompatible types in comparison |
 | CAL-E021 | Pipeline stage type mismatch |
-| CAL-E022 | SUBJECTS/OBJECTS requires belief-type input |
+| CAL-E022 | SUBJECTS/OBJECTS requires fact-type input |
 
 ### Execution Errors (CAL-E030 -- CAL-E031)
 
@@ -2727,13 +2727,13 @@ All error codes use the `CAL-E` prefix.
 |------|-------------|
 | CAL-E040 | SupersessionConflict -- target grain already superseded |
 | CAL-E041 | NoPreviousVersion -- REVERT target is the original grain |
-| CAL-E042 | GrainTypeNotEvolvable -- only Belief grains can be superseded |
+| CAL-E042 | GrainTypeNotEvolvable -- only Fact grains can be superseded |
 | CAL-E043 | WriteQuotaExceeded -- too many evolve operations |
 | CAL-E044 | Tier1NotEnabled -- requires Tier 1 capability |
 | CAL-E045 | NamespaceMismatch -- target grain in different namespace |
 | CAL-E046 | TargetNotFound -- target hash does not exist |
 | CAL-E050 | MissingRequiredField -- ADD requires subject, relation, object |
-| CAL-E051 | GrainTypeNotAddable -- only Belief, Observation, Goal can be created |
+| CAL-E051 | GrainTypeNotAddable -- only Fact, Observation, Goal can be created |
 | CAL-E052 | AddQuotaExceeded -- too many ADD operations |
 
 ### Multi-Format Errors (CAL-E110, CAL-E113)
@@ -2749,7 +2749,7 @@ All error codes use the `CAL-E` prefix.
 |------|-------------|
 | CAL-E060 | AmbiguousShortcut / FieldNotOnGrainType |
 | CAL-E061 | Grain-type-specific field used without declaring grain type |
-| CAL-E062 | Invalid `action_phase` value |
+| CAL-E062 | Invalid `tool_phase` value |
 | CAL-E063 | Invalid `goal_state` value |
 | CAL-E064 | Invalid `consent_action` value |
 | CAL-E065 | Invalid `recall_priority` value |
@@ -2892,10 +2892,10 @@ CHUNK, PAUSE, RESUME, CANCEL
 | Workflow | `trigger` | String | `=`, `!=` |
 | Workflow | `node` | String | `=` |
 | Workflow | `binding` | String | `=` |
-| Action | `tool_name` | String | `=`, `!=`, `IN` |
-| Action | `action_phase` | String | `=` |
-| Action | `is_error` | Boolean | `=` |
-| Action | `tool_call_id` | String | `=` |
+| Tool | `tool_name` | String | `=`, `!=`, `IN` |
+| Tool | `tool_phase` | String | `=` |
+| Tool | `is_error` | Boolean | `=` |
+| Tool | `tool_call_id` | String | `=` |
 | Observation | `observer_id` | String | `=`, `!=` |
 | Observation | `observer_type` | String | `=`, `!=` |
 | Goal | `goal_state` | String | `=`, `!=` |
@@ -2938,7 +2938,7 @@ CHUNK, PAUSE, RESUME, CANCEL
 
 ---
 
-**Document Status:** This is the CAL (Context Assembly Language) Specification v1.0. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.3 — see [SPECIFICATION.md](./SPECIFICATION.md).
+**Document Status:** This is the CAL (Context Assembly Language) Specification v1.0. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.4 — see [SPECIFICATION.md](./SPECIFICATION.md).
 
 **Last Updated:** 2026-03-05
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)

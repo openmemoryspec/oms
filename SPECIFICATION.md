@@ -1,10 +1,10 @@
 # Open Memory Specification (OMS)
 ## Memory Grain (.mg) Container Definition
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** Standards Track
 **Category:** Data Formats
-**Date:** February 2026
+**Date:** June 2026
 **Copyright:** Public Domain (CC0 1.0 Universal)
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
 
@@ -68,7 +68,7 @@ A memory grain is the atomic unit of agent knowledge—a single immutable fact, 
 
 The .mg container format is to autonomous systems what JSON is to APIs and .git objects are to version control: a universal, language-agnostic, self-describing interchange format. It is the foundational wire format of OMS.
 
-**CAL (Context Assembly Language)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) and **SML (Semantic Markup Language)** ([SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md)) are part of OMS v1.3. CAL defines the query and context-assembly layer that operates on OMS stores; SML is CAL's default output format for LLM context consumption. See §1.5 for details.
+**CAL (Context Assembly Language)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) and **SML (Semantic Markup Language)** ([SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md)) are part of OMS v1.4. CAL defines the query and context-assembly layer that operates on OMS stores; SML is CAL's default output format for LLM context consumption. See §1.5 for details.
 
 ---
 
@@ -138,13 +138,13 @@ OMS addresses this gap by defining a universal standard for knowledge interchang
 
 ### 1.5 Companion Specifications
 
-OMS defines the wire format and grain semantics. Two companion specifications are part of the OMS v1.3 release and are included in this repository:
+OMS defines the wire format and grain semantics. Two companion specifications are part of the OMS v1.4 release and are included in this repository:
 
 **CAL — Context Assembly Language** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md))
 
 CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. It answers the question: *"what should be in the agent's context window right now?"* Key properties:
 
-- Operates on all 10 OMS grain types (Fact, Event, State, Workflow, Action, Observation, Goal, Reasoning, Consensus, Consent)
+- Operates on all 10 OMS grain types (Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent)
 - Extends the OMS Store Protocol (§28.4) with a formal, structured query syntax
 - `ASSEMBLE` statements compose context from multiple grain sources within a token budget
 - Append-only: CAL writes create new grains via `put`; the language cannot delete or modify existing grains — this is enforced at the grammar level
@@ -503,7 +503,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `trigger` | `trigger` | string | Activation condition |
 | `nodes` | `nodes` | array[string] | Graph node IDs/labels |
 | `edges` | `edges` | array[map] | Directed edges (see §8.4 edge schema) |
-| `bindings` | `bind` | map[string→string] | Node ID → Action definition grain hash |
+| `bindings` | `bind` | map[string→string] | Node ID → Tool definition grain hash |
 | `retries` | `retries` | map[string→int] | Node ID → max repeat count |
 
 **Edge nested field compaction:**
@@ -515,11 +515,11 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `cond` | `cond` | string |
 | `max_cycles` | `mxc` | int |
 
-### 6.5 Action-Specific Fields
+### 6.5 Tool-Specific Fields
 
 | Full Name | Short Key | Type | Notes |
 |-----------|-----------|------|-------|
-| `action_phase` | `aphase` | string | Discriminator: `"definition"` \| `"call"` \| `"result"` \| absent = complete |
+| `tool_phase` | `aphase` | string | Discriminator: `"definition"` \| `"call"` \| `"result"` \| absent = complete |
 | `tool_name` | `tn` | string | |
 | `input` | `inp` | map | Canonical name for tool arguments (replaces `arguments`) |
 | `content` | `cnt` | any | Canonical name for tool result (replaces `result`) |
@@ -540,7 +540,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `parent_task_id` | `ptid` | string | Content address of parent task grain |
 | `tool_description` | `tdesc` | string | Human-readable description of the tool (definition phase) |
 | `input_schema` | `isch` | map | JSON Schema for tool inputs; mirrors Anthropic `input_schema` / MCP `inputSchema` (definition phase) |
-| `output_schema` | `osch` | map | JSON Schema (draft-07 compatible) describing the action's return value (definition phase) |
+| `output_schema` | `osch` | map | JSON Schema (draft-07 compatible) describing the tool's return value (definition phase) |
 | `strict` | `strict` | bool | If `true`, model guarantees strict JSON Schema conformance for `input` (definition phase) |
 
 ### 6.6 Observation-Specific Fields
@@ -808,7 +808,7 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 **Optional fields:**
 - `trigger` (string) — condition that activates this workflow
 - `edges` (array[map]) — directed edges between nodes (see edge schema below). When absent, nodes are unconnected.
-- `bindings` (map[string→string]) — maps node IDs to Action definition grain hashes (`action_phase: "definition"`). Unbound nodes are resolved by convention (tool name match) or treated as abstract steps.
+- `bindings` (map[string→string]) — maps node IDs to Tool definition grain hashes (`tool_phase: "definition"`). Unbound nodes are resolved by convention (tool name match) or treated as abstract steps.
 - `retries` (map[string→int]) — maps node IDs to maximum repeat count on failure. Absent means no retry.
 - All common fields.
 
@@ -836,15 +836,15 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 - Node IDs MUST be unique within `nodes`.
 - Unbounded cycles (back-edge without `max_cycles`, and no entry in `retries` for the target node) SHOULD be rejected by implementations.
 
-**Node-to-Action binding** (three-tier resolution):
+**Node-to-Tool binding** (three-tier resolution):
 
 | Tier | Condition | Resolution |
 |------|-----------|------------|
-| Bound | Node ID present in `bindings` | Fetch the Action definition grain by hash; use its `tool_name`, `input_schema`, `output_schema` |
-| Named | No binding, but an Action definition grain exists with matching `tool_name` | Resolve by convention (implementation-defined lookup) |
+| Bound | Node ID present in `bindings` | Fetch the Tool definition grain by hash; use its `tool_name`, `input_schema`, `output_schema` |
+| Named | No binding, but an Tool definition grain exists with matching `tool_name` | Resolve by convention (implementation-defined lookup) |
 | Abstract | No binding, no matching tool | Node label is a human-readable instruction; executor (LLM or agent) interprets it |
 
-**Execution record relation:** When an agent executes a workflow node, it creates an Tool grain (phase: complete or call/result) with a relation of type `mg:step_action:<node_id>` targeting the Workflow grain hash. This links execution records to the plan without modifying the immutable Workflow grain.
+**Execution record relation:** When an agent executes a workflow node, it creates a Tool grain (phase: complete or call/result) with a relation of type `mg:step_action:<node_id>` targeting the Workflow grain hash. This links execution records to the plan without modifying the immutable Workflow grain.
 
 **Example — linear pipeline:**
 
@@ -909,12 +909,12 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 }
 ```
 
-### 8.5 Action (type = 0x05)
+### 8.5 Tool (type = 0x05)
 
-A record of a tool invocation, code execution, or computer-use action. See §27.1 for the full `action_phase` discriminator and field tables.
+A record of a tool invocation, code execution, or computer-use action. See §27.1 for the full `tool_phase` discriminator and field tables.
 
 **Required fields:**
-- `type` = "action"
+- `type` = "tool"
 - Phase-dependent required fields (see §27.1)
 - `created_at` (int64, epoch ms)
 
@@ -2447,11 +2447,11 @@ The `observation_scope` field is a **closed enum**. It describes the temporal br
 
 This section provides detailed field specifications for each standard grain type. For Tool grain phase fields, see §27.1. For Observer types, see §24. For Observation modes/scopes, see §25/§26.
 
-### 27.1 Action Grain (type = 0x05) — Phase and Mode Details
+### 27.1 Tool Grain (type = 0x05) — Phase and Mode Details
 
-The `action_phase` field acts as a discriminator for async vs. synchronous tool call recording.
+The `tool_phase` field acts as a discriminator for async vs. synchronous tool call recording.
 
-**`action_phase` discriminator:**
+**`tool_phase` discriminator:**
 
 | Value | Meaning | Required fields | Absent fields |
 |---|---|---|---|
@@ -2496,8 +2496,8 @@ The `action_phase` field acts as a discriminator for async vs. synchronous tool 
 
 ```json
 {
-  "type": "action",
-  "action_phase": "definition",
+  "type": "tool",
+  "tool_phase": "definition",
   "tool_name": "get_weather",
   "tool_description": "Get the current weather in a given location.",
   "input_schema": {
@@ -2528,7 +2528,7 @@ The `action_phase` field acts as a discriminator for async vs. synchronous tool 
 
 ```json
 {
-  "type": "action",
+  "type": "tool",
   "tool_name": "get_weather",
   "tool_call_id": "toulu_01A09q90qw90lq917835lq9",
   "input": {"location": "San Francisco, CA", "unit": "celsius"},
@@ -2543,7 +2543,7 @@ The `action_phase` field acts as a discriminator for async vs. synchronous tool 
 
 ```json
 {
-  "type": "action",
+  "type": "tool",
   "execution_mode": "code_exec",
   "code": "import pandas as pd\ndf = pd.read_csv('data.csv')\nprint(df.describe())",
   "interpreter_id": "session-abc123",
@@ -2556,7 +2556,7 @@ The `action_phase` field acts as a discriminator for async vs. synchronous tool 
 
 **Alignment with Anthropic API:**
 
-| Anthropic API field | OMS Action field |
+| Anthropic API field | OMS Tool field |
 |---|---|
 | `tool.name` | `tool_name` (definition grain) |
 | `tool.description` | `tool_description` |
@@ -2733,12 +2733,12 @@ Implementations MAY index Observation grains whose `observer_type` starts with `
 }
 ```
 
-### 27.7 Consensus Grain Usage for Action Definition Validation
+### 27.7 Consensus Grain Usage for Tool Definition Validation
 
-When multiple independent sources produce or validate the same Action definition grain, a Consensus grain (type 0x09) records the agreement. This pattern is useful for integration platforms where definitions may be synthesized by LLMs, parsed from OpenAPI specs, validated against reference data, or refined by execution feedback analysis.
+When multiple independent sources produce or validate the same Tool definition grain, a Consensus grain (type 0x09) records the agreement. This pattern is useful for integration platforms where definitions may be synthesized by LLMs, parsed from OpenAPI specs, validated against reference data, or refined by execution feedback analysis.
 
 **Semantics:**
-- `agreed_content` is the content address of the Action definition grain that achieved consensus.
+- `agreed_content` is the content address of the Tool definition grain that achieved consensus.
 - Each entry in `participating_observers` is a DID identifying a validation source.
 - `dissent_grains` link to alternative definitions that did not achieve consensus.
 - Consensus achievement (`agreement_count >= threshold`) serves as a confidence signal for tool catalog quality.
@@ -2759,7 +2759,7 @@ When multiple independent sources produce or validate the same Action definition
   "dissent_count": 1,
   "agreed_content": "<content-address-of-validated-definition-grain>",
   "dissent_grains": ["<content-address-of-alternative-definition>"],
-  "structural_tags": ["consensus:action-definition"],
+  "structural_tags": ["consensus:tool-definition"],
   "namespace": "axtion:connectors:github",
   "related_to": [
     {"hash": "<definition-grain-hash>", "relation_type": "supports", "weight": 1.0}
@@ -2880,7 +2880,7 @@ The `object` map is an open schema. Standard keys:
 |---|---|---|
 | `name` | string | Human-readable agent name |
 | `description` | string | Agent purpose and capabilities summary |
-| `supported_tools` | array[string] | Tool names this agent can invoke (cross-reference with Action definition grains) |
+| `supported_tools` | array[string] | Tool names this agent can invoke (cross-reference with Tool definition grains) |
 | `input_modalities` | array[string] | `"text"`, `"image"`, `"audio"`, `"video"`. What the agent can consume. |
 | `output_modalities` | array[string] | What the agent can produce |
 | `protocol` | string | Communication protocol: `"oms"`, `"mcp"`, `"a2a"`, `"custom"`. Open enum. |
@@ -3209,12 +3209,12 @@ Applies to grains that represent REST API connectors, tool catalog entries, webh
 - `int:response_mapping` MUST be a valid JQ expression if present.
 - `int:rate_limit` is advisory only — enforcement is an implementation concern.
 
-**Example — Action definition with integration profile:**
+**Example — Tool definition with integration profile:**
 
 ```json
 {
-  "type": "action",
-  "action_phase": "definition",
+  "type": "tool",
+  "tool_phase": "definition",
   "tool_name": "github:create-issue",
   "tool_description": "Create a new issue in a GitHub repository",
   "input_schema": {
@@ -3264,7 +3264,7 @@ header-fields = flags-byte type-byte ns-hash-bytes created-at-bytes
                 ; version-byte + header-fields = 9-byte "fixed header" in §3.1
 flags-byte    = %x00-FF
 type-byte     = %x01-0A / %xF0-FF
-                ; Fact=0x01, Event=0x02, State=0x03, Workflow=0x04, Action=0x05,
+                ; Fact=0x01, Event=0x02, State=0x03, Workflow=0x04, Tool=0x05,
                 ; Observation=0x06, Goal=0x07, Reasoning=0x08, Consensus=0x09,
                 ; Consent=0x0A, 0x0B-0xEF reserved, 0xF0-0xFF domain profile types
 ns-hash-bytes = 2OCTET  ; uint16 big-endian, first two bytes of SHA-256(namespace)
@@ -3382,11 +3382,11 @@ footer        = 32OCTET  ; SHA-256 checksum
 }
 ```
 
-**Action-Specific Fields:**
+**Tool-Specific Fields:**
 
 ```json
 {
-  "aphase": "action_phase",
+  "aphase": "tool_phase",
   "tn": "tool_name",
   "inp": "input",
   "cnt": "content",
@@ -3656,7 +3656,7 @@ content_address = sha256(blob).hex()
 
 ---
 
-**Document Status:** This is a v1.3 revision of the .mg format specification. This revision adds `output_schema` to the Tool grain definition phase, introduces the Integration domain profile (`profile:integration`) for REST API connectors and tool catalogs, documents trigger definition conventions via Observation grains, and documents Consensus grain usage patterns for multi-source action definition validation. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
+**Document Status:** This is a v1.4 revision of the .mg format specification. This revision renames grain type `0x01` from `belief` to `fact` and grain type `0x05` from `action` to `tool` (byte values unchanged — existing content addresses remain valid), redesigns the Workflow grain as a directed graph, and adds the `embedding_text` common field for retrieval. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
-**Last Updated:** 2026-03-03
+**Last Updated:** 2026-06-12
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
