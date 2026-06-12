@@ -144,7 +144,7 @@ OMS defines the wire format and grain semantics. Two companion specifications ar
 
 CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. It answers the question: *"what should be in the agent's context window right now?"* Key properties:
 
-- Operates on all 10 OMS grain types (Belief, Event, State, Workflow, Action, Observation, Goal, Reasoning, Consensus, Consent)
+- Operates on all 10 OMS grain types (Fact, Event, State, Workflow, Action, Observation, Goal, Reasoning, Consensus, Consent)
 - Extends the OMS Store Protocol (§28.4) with a formal, structured query syntax
 - `ASSEMBLE` statements compose context from multiple grain sources within a token budget
 - Append-only: CAL writes create new grains via `put`; the language cannot delete or modify existing grains — this is enforced at the grammar level
@@ -152,7 +152,7 @@ CAL is a non-destructive, deterministic, LLM-native language for assembling agen
 
 **SML — Semantic Markup Language** ([SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md))
 
-SML is a flat, tag-based markup format optimized for LLM context consumption. It is not XML. Tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …); attributes carry lightweight decision metadata; text content is natural language. SML is the default output format for CAL `ASSEMBLE` statements and is designed to be consumed directly by an LLM without an XML processor.
+SML is a flat, tag-based markup format optimized for LLM context consumption. It is not XML. Tag names are OMS grain types (`<fact>`, `<goal>`, `<event>`, …); attributes carry lightweight decision metadata; text content is natural language. SML is the default output format for CAL `ASSEMBLE` statements and is designed to be consumed directly by an LLM without an XML processor.
 
 ---
 
@@ -197,11 +197,11 @@ Hexadecimal values are lowercase. Byte sequences are represented in hex with spa
 
 | Value | Type | Description |
 |-------|------|-------------|
-| 0x01 | **Belief** | Structured belief — (subject, relation, object) triple with confidence and source |
+| 0x01 | **Fact** | Structured fact — (subject, relation, object) triple with confidence and source |
 | 0x02 | **Event** | Timestamped occurrence — message, interaction, or behavioral event |
 | 0x03 | **State** | Agent state snapshot — portable save point |
 | 0x04 | **Workflow** | Directed graph of procedural steps — plans, pipelines, processes |
-| 0x05 | **Action** | Tool invocation or code execution |
+| 0x05 | **Tool** | Tool invocation or code execution |
 | 0x06 | **Observation** | Raw sensory or cognitive input |
 | 0x07 | **Goal** | Objective with lifecycle semantics |
 | 0x08 | **Reasoning** | Inference chain and thought audit trail |
@@ -480,7 +480,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | Full Name | Short Key | Type | Notes |
 |-----------|-----------|------|-------|
 | `content` | `content` | string | Raw text of the event. MAY be omitted if `content_blocks` is present. |
-| `consolidated` | `consolidated` | bool | Whether this event has been distilled into Belief grains |
+| `consolidated` | `consolidated` | bool | Whether this event has been distilled into Fact grains |
 | `content_blocks` | `cblocks` | array[map] | Typed content blocks for structured LLM messages. When present, takes precedence over flat `content` string. Each entry: `{type: "text"/"image"/"tool_use"/"tool_result"/"thinking", ...}`. See note below. |
 | `model_id` | `mdl` | string | LLM model identifier that produced the response (e.g., `"claude-opus-4-6"`, `"gpt-4o"`). Absent for human-authored events. |
 | `stop_reason` | `stopr` | string | Why LLM generation stopped: `"end_turn"`, `"max_tokens"`, `"stop_sequence"`, `"tool_use"`. Open enum. |
@@ -533,7 +533,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `stdout` | `out` | string | Standard output from code execution |
 | `stderr` | `err2` | string | Standard error from code execution |
 | `exit_code` | `xc` | int | Process exit code from code execution |
-| `interpreter_id` | `iid` | string | Links Action grains sharing a stateful interpreter session |
+| `interpreter_id` | `iid` | string | Links Tool grains sharing a stateful interpreter session |
 | `error` | `err` | string | Error message (use with `is_error: true`) |
 | `error_type` | `etype` | string | Structured error classification: `"timeout"`, `"rate_limit"`, `"auth_failure"`, `"invalid_input"`, `"server_error"`, `"not_found"`, `"quota_exceeded"`. Open enum. Enables retry policy decisions without parsing free-text `error`. |
 | `duration_ms` | `dur` | int | Execution time in milliseconds |
@@ -624,12 +624,12 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 
 ### 6.11 Delegation-Specific Fields
 
-When a Goal or Belief grain uses the `mg:delegates_to` relation, the following fields specify the scope and constraints of the delegation. Without these fields, a delegation is unbounded — the delegatee receives no machine-readable limits. Implementations SHOULD populate delegation scope fields for any inter-agent authority grant.
+When a Goal or Fact grain uses the `mg:delegates_to` relation, the following fields specify the scope and constraints of the delegation. Without these fields, a delegation is unbounded — the delegatee receives no machine-readable limits. Implementations SHOULD populate delegation scope fields for any inter-agent authority grant.
 
 | Full Name | Short Key | Type | Notes |
 |-----------|-----------|------|-------|
 | `authorized_namespaces` | `ans` | array[string] | Namespaces the delegatee may read and write. `["*"]` = all namespaces (dangerous — SHOULD be avoided). |
-| `authorized_types` | `atypes` | array[uint8] | Grain type bytes the delegatee may create. E.g., `[0x01, 0x02, 0x05]` for Belief, Event, Action. |
+| `authorized_types` | `atypes` | array[uint8] | Grain type bytes the delegatee may create. E.g., `[0x01, 0x02, 0x05]` for Fact, Event, Tool. |
 | `authorized_tools` | `atools` | array[string] | Tool names the delegatee may invoke. Empty array = no tool restriction. |
 | `delegation_depth` | `ddepth` | int | Maximum re-delegation depth. 0 = delegatee MUST NOT re-delegate. Absent = unlimited (NOT RECOMMENDED). |
 | `delegation_expiry` | `dexp` | int64 | Epoch ms when delegation expires. After expiry, the delegatee's writes SHOULD be rejected by stores that enforce delegation scope. |
@@ -736,9 +736,9 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | Relation | Typical grain type | Meaning |
 |---|---|---|
 | `mg:perceives` | Observation | Raw sensory or cognitive input |
-| `mg:knows` | Belief | Derived belief or learned fact |
+| `mg:knows` | Fact | Derived fact or learned fact |
 | `mg:said` | Event | Message or utterance |
-| `mg:did` | Action | Tool or action invocation |
+| `mg:did` | Tool | Tool or action invocation |
 | `mg:infers` | Reasoning | Derived conclusion from prior grains |
 | `mg:agrees_with` | Consensus | Multi-agent threshold agreement |
 | `mg:state_at` | State | Agent state snapshot |
@@ -746,24 +746,24 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:intends` | Goal | Agent objective |
 | `mg:permits` | Consent | User grants agent right to retain or act |
 | `mg:revokes` | Consent | User revokes prior consent |
-| `mg:prohibits` | Belief/Goal | Hard prohibition |
-| `mg:requires` | Belief/Goal | Hard requirement |
-| `mg:prefers` | Belief | Soft preference |
-| `mg:avoids` | Belief | Soft avoidance preference |
+| `mg:prohibits` | Fact/Goal | Hard prohibition |
+| `mg:requires` | Fact/Goal | Hard requirement |
+| `mg:prefers` | Fact | Soft preference |
+| `mg:avoids` | Fact | Soft avoidance preference |
 | `mg:delegates_to` | Goal | Scoped authority grant (§6.11 delegation scope) |
-| `mg:owned_by` | Belief | Legal entity ownership (§12.5) |
-| `mg:has_capability` | Belief | Agent capability advertisement (§28.5 Agent Card) |
+| `mg:owned_by` | Fact | Legal entity ownership (§12.5) |
+| `mg:has_capability` | Fact | Agent capability advertisement (§28.5 Agent Card) |
 | `mg:handed_off_to` | Event | Session handoff event record (§28.7) |
 | `mg:depends_on` | Goal | Task dependency (distinct from `parent_goals` hierarchy) |
 | `mg:assigned_to` | Goal | Task assigned to agent for execution |
-| `mg:capable_of` | Belief | Learned skill with proficiency and strategies (§28.8 Skill Convention) |
+| `mg:capable_of` | Fact | Learned skill with proficiency and strategies (§28.8 Skill Convention) |
 
-### 8.1 Belief (type = 0x01)
+### 8.1 Fact (type = 0x01)
 
-A structured belief about the world — a (subject, relation, object) triple with confidence and source. The canonical unit of declarative knowledge.
+A structured fact about the world — a (subject, relation, object) triple with confidence and source. The canonical unit of declarative knowledge.
 
 **Required fields:**
-- `type` = "belief" (payload string; header byte = `0x01`)
+- `type` = "fact" (payload string; header byte = `0x01`)
 - `subject` (non-empty string)
 - `relation` (non-empty string)
 - `object` (string or map)
@@ -844,7 +844,7 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 | Named | No binding, but an Action definition grain exists with matching `tool_name` | Resolve by convention (implementation-defined lookup) |
 | Abstract | No binding, no matching tool | Node label is a human-readable instruction; executor (LLM or agent) interprets it |
 
-**Execution record relation:** When an agent executes a workflow node, it creates an Action grain (phase: complete or call/result) with a relation of type `mg:step_action:<node_id>` targeting the Workflow grain hash. This links execution records to the plan without modifying the immutable Workflow grain.
+**Execution record relation:** When an agent executes a workflow node, it creates an Tool grain (phase: complete or call/result) with a relation of type `mg:step_action:<node_id>` targeting the Workflow grain hash. This links execution records to the plan without modifying the immutable Workflow grain.
 
 **Example — linear pipeline:**
 
@@ -942,7 +942,7 @@ An explicit objective with lifecycle semantics. Goals transition through states 
 
 **Optional fields:** `criteria`, `criteria_structured`, `priority`, `parent_goals`, `depends_on` (array[string] — content addresses of prerequisite Goal grains that must complete before this one starts; distinct from `parent_goals` which implies decomposition, not dependency ordering), `assigned_agent` (string — DID of the agent assigned to execute this task), `expected_output` (string — description of expected output format), `output_grain` (string — content address of the grain containing the task's completed output), `deadline` (int64 — epoch ms hard deadline for task completion), `state_reason`, `satisfaction_evidence`, `progress`, `delegate_to`, `delegate_from`, `expiry_policy`, `recurrence`, `evidence_required`, `rollback_on_failure`, `allowed_transitions`, all common fields.
 
-Constraints, policies, and delegations are expressed as Goal or Belief grains with `mg:prohibits`, `mg:prefers`, `mg:avoids`, or `mg:delegates_to` relations, combined with `invalidation_policy` (§23) for enforcement.
+Constraints, policies, and delegations are expressed as Goal or Fact grains with `mg:prohibits`, `mg:prefers`, `mg:avoids`, or `mg:delegates_to` relations, combined with `invalidation_policy` (§23) for enforcement.
 
 > **Note — plan-and-execute agents:** The `depends_on` field enables DAG-structured task dependency graphs for hierarchical task decomposition. Agents using plan-and-execute patterns (e.g., LangGraph StateGraph, CrewAI task dependencies) SHOULD express task ordering via `depends_on` and task hierarchy via `parent_goals`. A Goal grain with `depends_on` references MUST NOT transition to `goal_state: "active"` until all referenced Goal grains have `goal_state: "satisfied"`. The `assigned_agent` field enables multi-agent task routing: the orchestrator creates Goal grains with `assigned_agent` pointing to worker agent DIDs.
 
@@ -987,7 +987,7 @@ A multi-agent agreement record — N observers voted on a shared claim, threshol
 
 ### 8.10 Consent (type = 0x0A)
 
-A DID-scoped, purpose-bounded permission grant or withdrawal. Four of six industry review domains independently required a dedicated Consent type at the type-byte level — HIPAA patient consent, legal privilege and DPA, regulatory consent, and GDPR/CCPA at scale. The `Belief + mg:permits` pattern is semantically correct but impractical when consent queries are compliance-critical and frequent.
+A DID-scoped, purpose-bounded permission grant or withdrawal. Four of six industry review domains independently required a dedicated Consent type at the type-byte level — HIPAA patient consent, legal privilege and DPA, regulatory consent, and GDPR/CCPA at scale. The `Fact + mg:permits` pattern is semantically correct but impractical when consent queries are compliance-critical and frequent.
 
 **Required fields:**
 - `type` = "consent"
@@ -1386,11 +1386,11 @@ For non-person memory (seasonal, device, system), `user_id` is simply omitted. `
 
 ### 12.5 Agent Ownership and Legal Entity
 
-An agent may belong to a legal entity — a natural person or a juridical person (company, partnership, NGO, government body). OMS expresses this relationship as a protected Belief grain written at agent provisioning time by the operator, not by the agent itself.
+An agent may belong to a legal entity — a natural person or a juridical person (company, partnership, NGO, government body). OMS expresses this relationship as a protected Fact grain written at agent provisioning time by the operator, not by the agent itself.
 
 #### 12.5.1 The `owner` Field
 
-Any grain type MAY carry an `owner` field (compacted: `own`) containing a **LegalEntity** map. In practice, `owner` is used in the ownership Belief grain described in §12.5.3. It MUST NOT be used as an access control gate — `invalidation_policy` (§23) governs supersession authorization.
+Any grain type MAY carry an `owner` field (compacted: `own`) containing a **LegalEntity** map. In practice, `owner` is used in the ownership Fact grain described in §12.5.3. It MUST NOT be used as an access control gate — `invalidation_policy` (§23) governs supersession authorization.
 
 **LegalEntity sub-schema:**
 
@@ -1441,9 +1441,9 @@ This is an open enum. Implementations MAY define additional values for jurisdict
 
 Prefixes not listed here MUST be preserved as-is. New prefixes do not require a spec update.
 
-#### 12.5.3 Ownership Belief Grain Convention
+#### 12.5.3 Ownership Fact Grain Convention
 
-Agent ownership is expressed as a Belief grain with `relation: "mg:owned_by"` in the `"agent:identity"` namespace. The `object` field carries the owner's legal name as a string (for semantic triple completeness). The structured `owner` field carries the full LegalEntity map.
+Agent ownership is expressed as a Fact grain with `relation: "mg:owned_by"` in the `"agent:identity"` namespace. The `object` field carries the owner's legal name as a string (for semantic triple completeness). The structured `owner` field carries the full LegalEntity map.
 
 This grain MUST be written by the operator at agent provisioning time. It MUST carry an `invalidation_policy` (§23) restricting supersession to the owner's authorized DID. It SHOULD be COSE-signed (§9) by the owner's DID.
 
@@ -1451,7 +1451,7 @@ This grain MUST be written by the operator at agent provisioning time. It MUST c
 
 ```json
 {
-  "type": "belief",
+  "type": "fact",
   "subject": "did:web:example.com:agents:my-agent",
   "relation": "mg:owned_by",
   "object": "Example Corp Pvt. Ltd.",
@@ -1481,7 +1481,7 @@ This grain MUST be written by the operator at agent provisioning time. It MUST c
 
 ```json
 {
-  "type": "belief",
+  "type": "fact",
   "subject": "did:key:z6MkAgentDID...",
   "relation": "mg:owned_by",
   "object": "Jane Doe",
@@ -1525,7 +1525,7 @@ This grain MUST be written by the operator at agent provisioning time. It MUST c
 1. The ownership grain MUST NOT be authored by the agent's own DID. Only the operator's DID is authorized to write it (key separation, §23.8).
 2. The `subject` MUST be the agent's DID.
 3. When multiple grains with `relation: "owned_by"` exist for the same `subject` in the `"agent:identity"` namespace, the grain with `invalidation_policy.mode ≠ "open"` is authoritative. Stores SHOULD surface it as the canonical ownership record.
-4. An agent observing a user assertion that contradicts the locked ownership grain MAY record that claim as an Observation grain. It MUST NOT write a superseding ownership Belief without the authorized signature.
+4. An agent observing a user assertion that contradicts the locked ownership grain MAY record that claim as an Observation grain. It MUST NOT write a superseding ownership Fact without the authorized signature.
 
 #### 12.5.4 Protection Layers
 
@@ -1796,7 +1796,7 @@ All Level 2 requirements, plus:
 - Hash-chained audit trail
 - Crash recovery and reconciliation
 - Policy engine with compliance presets
-- SHOULD partition Observation grain storage by observer domain, inferred from `observer_type`. Physical observer types (see Section 24) SHOULD flow to time-series storage with raw-data retention policies. Cognitive observer types SHOULD flow to vector + relational storage with the same retrieval semantics as Belief grains. Implementations MUST NOT hard-code the domain partition list — treat `observer_type` as an open string and drive routing from configuration or namespace.
+- SHOULD partition Observation grain storage by observer domain, inferred from `observer_type`. Physical observer types (see Section 24) SHOULD flow to time-series storage with raw-data retention policies. Cognitive observer types SHOULD flow to vector + relational storage with the same retrieval semantics as Fact grains. Implementations MUST NOT hard-code the domain partition list — treat `observer_type` as an open string and drive routing from configuration or namespace.
 
 ---
 
@@ -1977,7 +1977,7 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 69 74 a1 74 a4 66 61 63 74
 ```
 
-> Header breakdown: `01`=version, `00`=flags (public, MessagePack, unsigned), `01`=Belief type, `a4 d2`=SHA-256("shared")[0:2] as uint16 big-endian, `69 68 ba a0`=created_at_sec (1768471200 = 2026-01-15T10:00:00Z, big-endian).
+> Header breakdown: `01`=version, `00`=flags (public, MessagePack, unsigned), `01`=Fact type, `a4 d2`=SHA-256("shared")[0:2] as uint16 big-endian, `69 68 ba a0`=created_at_sec (1768471200 = 2026-01-15T10:00:00Z, big-endian).
 >
 > Payload breakdown: `89`=fixmap(9), `a4 61 64 69 64`=key "adid" (fixstr 4), `d9 38`=str8 length 56, followed by 56 UTF-8 bytes of the DID; key `c` value: `cb 3f ec cc cc cc cc cc cd` (float64 marker + 8 bytes = `3feccccccccccccd` = 0.9); then remaining keys "ca"/"ns"/"o"/"r"/"s"/"st"/"t" in lexicographic order with their values.
 
@@ -2000,12 +2000,12 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 [computed by reference implementation]
 ```
 
-### 21.3 Vector 3: Bi-Temporal Belief
+### 21.3 Vector 3: Bi-Temporal Fact
 
 **Input:**
 ```json
 {
-  "type": "belief",
+  "type": "fact",
   "subject": "Alice",
   "relation": "works_at",
   "object": "Acme Corp",
@@ -2024,12 +2024,12 @@ cb 3f ec cc cc cc cc cc cd a2 63 61 cf 00 00 01 9b c1 19 01 00 a2 6e 73 a6
 [computed by reference implementation]
 ```
 
-### 21.4 Vector 4: Belief with Cross-Links
+### 21.4 Vector 4: Fact with Cross-Links
 
 **Input:**
 ```json
 {
-  "type": "belief",
+  "type": "fact",
   "subject": "Bob",
   "relation": "manages",
   "object": "Project Alpha",
@@ -2179,7 +2179,7 @@ To verify conformance:
 
 ### 22.7 Streaming and Partial Results
 
-OMS grains are atomic, immutable knowledge units. Streaming outputs (e.g., token-by-token LLM responses, incremental tool results, partial server-sent events) are transport-layer concerns outside OMS scope. Implementations SHOULD buffer streaming content in their transport layer and emit a single immutable Event or Action grain upon stream completion. For long-running tool executions requiring progress visibility, implementations MAY emit periodic State grains (type 0x03) as progress checkpoints, linked via `derived_from` to the originating Action grain. Each checkpoint is a complete, self-contained grain — not a diff.
+OMS grains are atomic, immutable knowledge units. Streaming outputs (e.g., token-by-token LLM responses, incremental tool results, partial server-sent events) are transport-layer concerns outside OMS scope. Implementations SHOULD buffer streaming content in their transport layer and emit a single immutable Event or Tool grain upon stream completion. For long-running tool executions requiring progress visibility, implementations MAY emit periodic State grains (type 0x03) as progress checkpoints, linked via `derived_from` to the originating Tool grain. Each checkpoint is a complete, self-contained grain — not a diff.
 
 ### 22.8 Recall Priority and Agent Memory Tiers
 
@@ -2201,10 +2201,10 @@ For cross-framework agent state portability, implementations SHOULD use the foll
 |---|---|---|
 | `messages_tail` | string | Content address of the most recent Event grain in the conversation |
 | `memory_blocks` | map | Named memory blocks: `{block_name: block_value_string}`. Letta-compatible. |
-| `system_prompt` | string | System prompt text, or content address of a Belief grain containing it |
+| `system_prompt` | string | System prompt text, or content address of a Fact grain containing it |
 | `active_tools` | array[string] | Tool names available in this agent state |
 | `model` | string | LLM model identifier (e.g., `"claude-opus-4-6"`) |
-| `pending_tool_calls` | array[string] | Content addresses of Action grains in `"call"` phase awaiting results |
+| `pending_tool_calls` | array[string] | Content addresses of Tool grains in `"call"` phase awaiting results |
 | `agent_config` | map | Framework-specific agent configuration (opaque to the spec) |
 
 This schema is RECOMMENDED, not required. Implementations MAY include additional keys. The `memory_blocks` key is aligned with Letta's `core_memory` structure. The `messages_tail` key enables reconstructing the conversation by following `parent_message_id` chains backward from the tail.
@@ -2445,7 +2445,7 @@ The `observation_scope` field is a **closed enum**. It describes the temporal br
 
 ## 27. Grain Type Field Specifications
 
-This section provides detailed field specifications for each standard grain type. For Action grain phase fields, see §27.1. For Observer types, see §24. For Observation modes/scopes, see §25/§26.
+This section provides detailed field specifications for each standard grain type. For Tool grain phase fields, see §27.1. For Observer types, see §24. For Observation modes/scopes, see §25/§26.
 
 ### 27.1 Action Grain (type = 0x05) — Phase and Mode Details
 
@@ -2578,7 +2578,7 @@ The `action_phase` field acts as a discriminator for async vs. synchronous tool 
 | `"goal_decomposition"` | Agent decomposed a parent goal |
 | `"goal_state_transition"` | Updates state of a prior Goal grain |
 | `"goal_revision"` | Human modified a previously set goal |
-| `"goal_inference"` | Agent inferred from Event or Belief patterns |
+| `"goal_inference"` | Agent inferred from Event or Fact patterns |
 | `"goal_delegation"` | Delegated from another agent |
 
 ### 27.3 `source_type` Registry
@@ -2846,12 +2846,12 @@ Stores SHOULD implement `supersede` as a distinct operation rather than exposing
 
 ### 28.5 Agent Capability Convention
 
-Agents that participate in multi-agent systems SHOULD advertise their capabilities by writing a Belief grain with the `mg:has_capability` relation to the `"agent:identity"` namespace. This grain serves as the OMS equivalent of an A2A Agent Card or MCP server capability declaration.
+Agents that participate in multi-agent systems SHOULD advertise their capabilities by writing a Fact grain with the `mg:has_capability` relation to the `"agent:identity"` namespace. This grain serves as the OMS equivalent of an A2A Agent Card or MCP server capability declaration.
 
 **Convention:**
 ```json
 {
-  "type": "belief",
+  "type": "fact",
   "subject": "did:web:example.com:agents:summarizer",
   "relation": "mg:has_capability",
   "object": {
@@ -2887,7 +2887,7 @@ The `object` map is an open schema. Standard keys:
 | `max_context_tokens` | int | Maximum context window in tokens |
 | `model` | string | Underlying LLM model identifier |
 
-Agents can discover other agents by querying Belief grains with `relation: "mg:has_capability"` in the `"agent:identity"` namespace.
+Agents can discover other agents by querying Fact grains with `relation: "mg:has_capability"` in the `"agent:identity"` namespace.
 
 ### 28.6 Conversation Threading Convention
 
@@ -2897,7 +2897,7 @@ Conversations are reconstructed from Event grain sequences using `session_id` an
 2. Event grains SHOULD populate `parent_message_id` (§6.2) to form a linked list from newest to oldest.
 3. Branch points are expressed by two Event grains sharing the same `parent_message_id` but having different content addresses (tree-of-thought, beam search, alternative paths).
 4. A State grain (type 0x03) with `relation: "mg:state_at"` and a `context` map containing `{messages_tail, message_count, participants}` represents a conversation snapshot.
-5. Conversation summaries are Belief grains with `consolidation_level >= 1`, `derived_from` pointing to the summarized Event grains, and `source_type: "consolidated"`.
+5. Conversation summaries are Fact grains with `consolidation_level >= 1`, `derived_from` pointing to the summarized Event grains, and `source_type: "consolidated"`.
 
 **Retrieving a conversation:**
 1. Query: `type=event, session_id=X, system_valid_to=null, sort=timestamp_ms ASC`
@@ -2908,26 +2908,26 @@ Conversations are reconstructed from Event grain sequences using `session_id` an
 When Agent A transfers control of a conversation to Agent B, the handoff is recorded using a Goal grain with `mg:delegates_to` relation and delegation scope fields (§6.11):
 
 1. Agent A writes a Goal grain with `relation: "mg:delegates_to"`, `subject` = Agent A's DID, `object` = Agent B's DID, and delegation scope fields specifying `authorized_namespaces`, `authorized_tools`, `context_grains`, and `return_to`.
-2. The `context_grains` field contains content addresses of grains Agent B needs to continue — typically the recent Event grain chain and any relevant Belief/State grains.
+2. The `context_grains` field contains content addresses of grains Agent B needs to continue — typically the recent Event grain chain and any relevant Fact/State grains.
 3. Agent B ingests the referenced grains, validates the delegation scope, and continues with a new `run_id` but the same `session_id`.
 4. When Agent B completes its task, it writes a Goal grain with `goal_state: "satisfied"` linked via `derived_from` to the delegation grain, and control returns to the agent specified in `return_to`.
 
 ### 28.8 Skill Convention
 
-Agents that learn reusable capabilities SHOULD represent them as Belief grains with `relation: "mg:capable_of"` and a structured `object` map. A skill grain captures what an agent can do, how well it can do it, and the procedural knowledge needed to transfer the capability to another agent.
+Agents that learn reusable capabilities SHOULD represent them as Fact grains with `relation: "mg:capable_of"` and a structured `object` map. A skill grain captures what an agent can do, how well it can do it, and the procedural knowledge needed to transfer the capability to another agent.
 
 **Distinction from related constructs:**
 
 | Construct | Grain type | What it captures |
 |---|---|---|
-| Agent Capability (§28.5) | Belief (`mg:has_capability`) | Static identity card — what the agent *is built to do* |
-| Skill (§28.8) | Belief (`mg:capable_of`) | Learned capability — what the agent *has learned to do*, with proficiency and strategies |
+| Agent Capability (§28.5) | Fact (`mg:has_capability`) | Static identity card — what the agent *is built to do* |
+| Skill (§28.8) | Fact (`mg:capable_of`) | Learned capability — what the agent *has learned to do*, with proficiency and strategies |
 | Workflow (§8.4) | Workflow | Fixed action sequence — a single procedure, not an adaptive capability |
 
 **Convention:**
 ```json
 {
-  "type": "belief",
+  "type": "fact",
   "subject": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
   "relation": "mg:capable_of",
   "object": {
@@ -2970,7 +2970,7 @@ The `object` map is an open schema. Standard keys:
 | `description` | string | Human-readable summary of what the skill enables |
 | `proficiency` | float64, [0.0, 1.0] | Current mastery level. SHOULD equal the grain's top-level `confidence`. |
 | `strategies` | array[map] | Context-dependent approaches. Each entry: `{condition: string, workflow: string, description?: string}`. The `workflow` value is a content address of a Workflow grain (§8.4). |
-| `prerequisites` | array[string] | Content addresses of Skill Belief grains that must be acquired before this skill is effective |
+| `prerequisites` | array[string] | Content addresses of Skill Fact grains that must be acquired before this skill is effective |
 | `practice_count` | int | Number of successful applications (mirrors `success_count` in core fields) |
 | `last_practiced_at` | int64 | Epoch ms of most recent successful application |
 | `transferable` | bool | If `true`, another agent MAY ingest this grain and its referenced Workflow grains to acquire the skill |
@@ -2978,26 +2978,26 @@ The `object` map is an open schema. Standard keys:
 | `output_modalities` | array[string] | What the skill produces |
 | `domain` | string | Domain context: `"software"`, `"research"`, `"healthcare"`, `"finance"`. Open enum. |
 
-**Namespace:** Skill Belief grains SHOULD use the `"agent:skills"` namespace to enable efficient discovery queries.
+**Namespace:** Skill Fact grains SHOULD use the `"agent:skills"` namespace to enable efficient discovery queries.
 
 **Proficiency lifecycle:**
 
-1. **Acquisition.** When an agent first learns a capability, it writes a Skill Belief grain with an initial `proficiency` (typically low). The `derived_from` field SHOULD reference the grains (Events, Actions, Reasoning) that contributed to learning.
-2. **Improvement.** Each time proficiency changes, the agent supersedes the previous Skill Belief grain with an updated `proficiency` and incremented `practice_count`. The supersession chain provides a full learning history.
+1. **Acquisition.** When an agent first learns a capability, it writes a Skill Fact grain with an initial `proficiency` (typically low). The `derived_from` field SHOULD reference the grains (Events, Actions, Reasoning) that contributed to learning.
+2. **Improvement.** Each time proficiency changes, the agent supersedes the previous Skill Fact grain with an updated `proficiency` and incremented `practice_count`. The supersession chain provides a full learning history.
 3. **Degradation.** Implementations MAY decay proficiency over time if `last_practiced_at` exceeds a threshold. This is an index-layer concern, not a grain mutation — the store writes a new superseding grain with reduced proficiency.
 
 **Skill transfer between agents:**
 
-1. Agent A queries its store: `type=belief, relation="mg:capable_of", namespace="agent:skills", transferable=true`.
-2. Agent A shares the Skill Belief grain and all Workflow grains referenced in `strategies` with Agent B (via `get_batch` on the content addresses).
-3. Agent B ingests the grains, rewrites the Skill Belief with its own `author_did`, initial `proficiency: 0.0`, and `practice_count: 0`, and sets `derived_from` to Agent A's original Skill Belief content address. The `origin_did` field preserves Agent A's DID for provenance.
+1. Agent A queries its store: `type=fact, relation="mg:capable_of", namespace="agent:skills", transferable=true`.
+2. Agent A shares the Skill Fact grain and all Workflow grains referenced in `strategies` with Agent B (via `get_batch` on the content addresses).
+3. Agent B ingests the grains, rewrites the Skill Fact with its own `author_did`, initial `proficiency: 0.0`, and `practice_count: 0`, and sets `derived_from` to Agent A's original Skill Fact content address. The `origin_did` field preserves Agent A's DID for provenance.
 4. Agent B improves proficiency through practice, superseding the skill grain as described above.
 
 **Skill discovery:**
 
-Agents discover available skills by querying: `type=belief, relation="mg:capable_of", namespace="agent:skills", system_valid_to=null, sort=proficiency DESC`.
+Agents discover available skills by querying: `type=fact, relation="mg:capable_of", namespace="agent:skills", system_valid_to=null, sort=proficiency DESC`.
 
-To find agents capable of a specific skill: `type=belief, relation="mg:capable_of", object.name="code_review", system_valid_to=null`.
+To find agents capable of a specific skill: `type=fact, relation="mg:capable_of", object.name="code_review", system_valid_to=null`.
 
 > **Note — promotion path:** If the convention approach proves insufficient — for instance, if skill queries become performance-critical across large multi-agent deployments, or if multiple domain profiles independently require skill-specific fields at the type level — a dedicated Skill grain type (`0x0B`) with its own required fields and type byte MAY be introduced in a future OMS version, following the precedent set by Consent (§8.10).
 
@@ -3020,7 +3020,7 @@ CAL extends the store operations defined in §28.4 with a structured query langu
 
 **SML output format:**
 
-CAL `ASSEMBLE` statements produce **SML (Semantic Markup Language)** output by default. SML is a flat, tag-based markup format optimized for LLM consumption: tag names are OMS grain types (`<belief>`, `<goal>`, `<event>`, …), attributes carry lightweight metadata, and text content is natural language. See the [SML specification](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md) for the full format definition, structural rules, and progressive disclosure model. Implementations that expose a query layer SHOULD support CAL and produce SML output for agent context assembly.
+CAL `ASSEMBLE` statements produce **SML (Semantic Markup Language)** output by default. SML is a flat, tag-based markup format optimized for LLM consumption: tag names are OMS grain types (`<fact>`, `<goal>`, `<event>`, …), attributes carry lightweight metadata, and text content is natural language. See the [SML specification](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md) for the full format definition, structural rules, and progressive disclosure model. Implementations that expose a query layer SHOULD support CAL and produce SML output for agent context assembly.
 
 ---
 
@@ -3264,7 +3264,7 @@ header-fields = flags-byte type-byte ns-hash-bytes created-at-bytes
                 ; version-byte + header-fields = 9-byte "fixed header" in §3.1
 flags-byte    = %x00-FF
 type-byte     = %x01-0A / %xF0-FF
-                ; Belief=0x01, Event=0x02, State=0x03, Workflow=0x04, Action=0x05,
+                ; Fact=0x01, Event=0x02, State=0x03, Workflow=0x04, Action=0x05,
                 ; Observation=0x06, Goal=0x07, Reasoning=0x08, Consensus=0x09,
                 ; Consent=0x0A, 0x0B-0xEF reserved, 0xF0-0xFF domain profile types
 ns-hash-bytes = 2OCTET  ; uint16 big-endian, first two bytes of SHA-256(namespace)
@@ -3586,11 +3586,11 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 - **Provenance:** Derivation trail showing how grain was created
 - **Cross-link:** Semantic relationship between grains
 - **Bi-temporal:** Tracking both event-time and system-time dimensions
-- **Belief:** Grain type 0x01 — a held claim, factual statement, or declarative knowledge about the world
+- **Fact:** Grain type 0x01 — a held claim, factual statement, or declarative knowledge about the world
 - **Event:** Grain type 0x02 — a discrete occurrence with start/end time
 - **State:** Grain type 0x03 — a persisting condition or status at a point in time
 - **Workflow:** Grain type 0x04 — a directed graph of procedural steps, supporting sequential, conditional, parallel, and cyclic execution paths
-- **Action:** Grain type 0x05 — a completed tool invocation, API call, or agent action
+- **Tool:** Grain type 0x05 — a completed tool invocation, API call, or agent action
 - **Observation:** Grain type 0x06 — a raw sensor or environmental reading without interpretation
 - **Goal:** Grain type 0x07 — a desired future state or objective
 - **Reasoning:** Grain type 0x08 — an inference chain, chain-of-thought, or decision rationale
@@ -3608,9 +3608,9 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 ## Appendix G: Complete Example Grain
 
 ```python
-# Create a belief grain
+# Create a fact grain
 grain = {
-    "type": "belief",
+    "type": "fact",
     "subject": "machine-learning",
     "relation": "is_subset_of",
     "object": "artificial-intelligence",
@@ -3644,7 +3644,7 @@ grain = {
 # 4. Sort keys lexicographically
 # 5. Encode as canonical MessagePack
 # 6. Prepend 9-byte fixed header: version(1) + flags(1) + type(1) + ns_hash(2) + created_at(4)
-#    type byte = 0x01 (Belief)
+#    type byte = 0x01 (Fact)
 # 7. Compute SHA-256 hash
 
 blob = serialize(grain)
@@ -3656,7 +3656,7 @@ content_address = sha256(blob).hex()
 
 ---
 
-**Document Status:** This is a v1.3 revision of the .mg format specification. This revision adds `output_schema` to the Action grain definition phase, introduces the Integration domain profile (`profile:integration`) for REST API connectors and tool catalogs, documents trigger definition conventions via Observation grains, and documents Consensus grain usage patterns for multi-source action definition validation. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
+**Document Status:** This is a v1.3 revision of the .mg format specification. This revision adds `output_schema` to the Tool grain definition phase, introduces the Integration domain profile (`profile:integration`) for REST API connectors and tool catalogs, documents trigger definition conventions via Observation grains, and documents Consensus grain usage patterns for multi-source action definition validation. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
 **Last Updated:** 2026-03-03
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
