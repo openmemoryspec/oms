@@ -760,7 +760,7 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | Relation | Typical grain type | Meaning |
 |---|---|---|
 | `mg:perceives` | Observation | Raw sensory or cognitive input |
-| `mg:knows` | Fact | Derived fact or learned fact |
+| `mg:knows` | Fact | Derived or learned fact |
 | `mg:said` | Event | Message or utterance |
 | `mg:did` | Tool | Tool or action invocation |
 | `mg:infers` | Reasoning | Derived conclusion from prior grains |
@@ -865,7 +865,7 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 | Tier | Condition | Resolution |
 |------|-----------|------------|
 | Bound | Node ID present in `bindings` | Fetch the Tool definition grain by hash; use its `tool_name`, `input_schema`, `output_schema` |
-| Named | No binding, but an Tool definition grain exists with matching `tool_name` | Resolve by convention (implementation-defined lookup) |
+| Named | No binding, but a Tool definition grain exists with matching `tool_name` | Resolve by convention (implementation-defined lookup) |
 | Abstract | No binding, no matching tool | Node label is a human-readable instruction; executor (LLM or agent) interprets it |
 
 **Execution record relation:** When an agent executes a workflow node, it creates a Tool grain (phase: complete or call/result) with a relation of type `mg:step_action:<node_id>` targeting the Workflow grain hash. This links execution records to the plan without modifying the immutable Workflow grain.

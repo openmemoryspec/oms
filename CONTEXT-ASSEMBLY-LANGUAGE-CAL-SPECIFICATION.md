@@ -824,7 +824,7 @@ CAL defines **relation category shortcuts** as syntactic sugar for common multi-
 **Examples:**
 
 ```sql
--- All preference-related beliefs about alice
+-- All preference-related facts about alice
 RECALL facts WHERE subject = "alice" AND relation IS PREFERENCE
   ORDER BY confidence DESC
 
@@ -901,14 +901,14 @@ The flagship new statement. Composes a context block from multiple RECALL source
 CAL/1 ASSEMBLE user_context
   FOR "conversation about alice's preferences and goals"
   FROM
-    beliefs:  (RECALL facts ABOUT "alice" WHERE relation = "prefers" LIMIT 20),
+    facts:    (RECALL facts ABOUT "alice" WHERE relation = "prefers" LIMIT 20),
     goals:    (RECALL goals ABOUT "alice" RECENT 10),
     events:   (RECALL events WHERE user_id = "alice" RECENT 5),
     history:  (RECALL facts ABOUT "alice"
                 WHERE relation = "prefers" WITH superseded
                 ORDER BY time DESC LIMIT 3)
   BUDGET 2000 tokens
-  PRIORITY beliefs > goals > events > history
+  PRIORITY facts > goals > events > history
   FORMAT markdown
   WITH progressive_disclosure, dedup(subject)
 ```
@@ -976,7 +976,7 @@ Returns the execution plan without running the query. Works with all statement t
 EXPLAIN RECALL facts WHERE query = "alice preferences" LIMIT 10
 EXPLAIN ASSEMBLE user_context
   FOR "conversation about alice"
-  FROM beliefs: (RECALL facts ABOUT "alice"),
+  FROM facts: (RECALL facts ABOUT "alice"),
        goals: (RECALL goals ABOUT "alice" RECENT 5)
   BUDGET 2000 tokens
 ```
@@ -1090,7 +1090,7 @@ ADD workflow "release pipeline"
 
 **Structural inference:** Node types are inferred from graph topology — a node with multiple unconditional outgoing edges is a fork, a node receiving multiple edges is an AND-join, a node with `WHEN` edges is a decision point.
 
-**BIND clause:** Maps a node name to an Tool definition grain hash (`tool_phase: "definition"`). The executor fetches the definition to discover `tool_name`, `input_schema`, etc. Unbound nodes are resolved by name convention or treated as abstract steps.
+**BIND clause:** Maps a node name to a Tool definition grain hash (`tool_phase: "definition"`). The executor fetches the definition to discover `tool_name`, `input_schema`, etc. Unbound nodes are resolved by name convention or treated as abstract steps.
 
 **Node names:** Bare identifiers (`build`, `unit_test`) or quoted strings (`"send welcome email"`). Reserved words (`ADD`, `workflow`, `ON`, `WHEN`, `BIND`, `REASON`, `BECAUSE`) must be quoted.
 
@@ -1496,7 +1496,7 @@ CAL/1 DEFINE TEMPLATE semantic_sml
 ```sql
 CAL/1 ASSEMBLE conversation_context
   FOR "helping alice with her project"
-  FROM beliefs: (RECALL facts ABOUT "alice" LIMIT 20),
+  FROM facts: (RECALL facts ABOUT "alice" LIMIT 20),
        goals: (RECALL goals ABOUT "alice" RECENT 5)
   BUDGET 3000 tokens
   FORMAT TEMPLATE semantic_sml
@@ -1789,7 +1789,7 @@ assembly_started
 
 ```sql
 ASSEMBLE user_context
-  FROM beliefs: (RECALL facts ABOUT "alice")
+  FROM facts: (RECALL facts ABOUT "alice")
   BUDGET 2000 tokens
   STREAM { all }                              -- all events
   -- or: STREAM { progress, chunks }          -- specific events
@@ -2434,11 +2434,11 @@ Errors are stable across spec versions. Every error MUST include: code, message,
 {
   "error": {
     "code": "CAL-E003",
-    "message": "Unknown grain type \"fact\".",
-    "position": {"start": 7, "end": 11, "line": 1, "col": 8},
+    "message": "Unknown grain type \"belief\".",
+    "position": {"start": 7, "end": 13, "line": 1, "col": 8},
     "suggestion": "Did you mean \"fact\"? (OMS renamed Belief -> Fact in v1.4)",
     "example": "RECALL facts WHERE subject = \"alice\"",
-    "valid_values": ["fact","event","state","workflow","tool","observation","goal","reasoning","consensus","consent"]
+    "valid_values": ["fact","event","state","workflow","tool","observation","goal","reasoning","consensus","consent","skill"]
   }
 }
 ```
