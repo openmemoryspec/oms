@@ -10,7 +10,7 @@
 - [Abstract](#abstract)
 1. [What is SML?](#1-what-is-sml)
 2. [Structural Rules](#2-structural-rules)
-3. [Comprehensive Example — All 10 Grain Types](#3-comprehensive-example--all-10-grain-types)
+3. [Comprehensive Example — All 11 Grain Types](#3-comprehensive-example--all-11-grain-types)
 4. [Progressive Disclosure](#4-progressive-disclosure)
 - [Appendix A: Relationship to CAL](#appendix-a-relationship-to-cal)
 
@@ -57,7 +57,7 @@ The formatted output uses a **flat, semantic structure**:
 
 ---
 
-## 3. Comprehensive Example — All 10 Grain Types
+## 3. Comprehensive Example — All 11 Grain Types
 
 The following example shows a single assembled context covering every grain type. The scenario: an agent helping alice prepare her Q1 engineering review.
 
@@ -92,10 +92,12 @@ The following example shows a single assembled context covering every grain type
 
   <consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>
 
+  <skill name="metrics_review" proficiency="0.82" domain="software">summarise quarterly engineering metrics and surface the reliability narrative</skill>
+
 </context>
 ```
 
-Each element maps directly to one grain type. The LLM reads the tag to understand the epistemic status of the content — a `<fact>` carries a known confidence, a `<reasoning>` signals inference, a `<consent>` signals an explicit permission grant — without needing to parse attribute schemas or understand OMS internals.
+Each element maps directly to one grain type. The LLM reads the tag to understand the epistemic status of the content — a `<fact>` carries a known confidence, a `<reasoning>` signals inference, a `<consent>` signals an explicit permission grant, a `<skill>` signals a packaged, reusable capability — without needing to parse attribute schemas or understand OMS internals.
 
 ---
 

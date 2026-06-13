@@ -144,7 +144,7 @@ OMS defines the wire format and grain semantics. Two companion specifications ar
 
 CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. It answers the question: *"what should be in the agent's context window right now?"* Key properties:
 
-- Operates on all 10 OMS grain types (Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent)
+- Operates on all 11 OMS grain types (Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill)
 - Extends the OMS Store Protocol (§28.4) with a formal, structured query syntax
 - `ASSEMBLE` statements compose context from multiple grain sources within a token budget
 - Append-only: CAL writes create new grains via `put`; the language cannot delete or modify existing grains — this is enforced at the grammar level
@@ -207,7 +207,8 @@ Hexadecimal values are lowercase. Byte sequences are represented in hex with spa
 | 0x08 | **Reasoning** | Inference chain and thought audit trail |
 | 0x09 | **Consensus** | Multi-agent agreement record |
 | 0x0A | **Consent** | Permission grant or withdrawal — DID-scoped, purpose-bounded |
-| 0x0B–0xEF | Reserved | Future standard types |
+| 0x0B | **Skill** | Packaged, reusable agent capability — definition (how-to, tools, resources) plus optional learned proficiency |
+| 0x0C–0xEF | Reserved | Future standard types |
 | 0xF0–0xFF | Domain profile types | Application-defined per Appendix A domain profiles |
 
 **Bytes 3-4 — Namespace Hash:** First two bytes of SHA-256(namespace), encoded as `uint16` big-endian. Provides 65,536 routing buckets without deserialization. Full namespace string remains authoritative in payload. This field is a routing hint only and MUST NOT be used for security decisions (see §13.3, §20).
@@ -636,7 +637,30 @@ When a Goal or Fact grain uses the `mg:delegates_to` relation, the following fie
 | `context_grains` | `cgrains` | array[string] | Content addresses of grains to transfer as context to the delegatee. Enables session handoff: the delegator selects which grains the delegatee needs to continue. |
 | `return_to` | `retdid` | string | DID of the agent to return control to after the delegated task completes. |
 
-### 6.12 Compaction Rules
+### 6.12 Skill-Specific Fields
+
+> **Note:** `description` reuses the shared `desc` key (also used by Goal, §6.7). `holder_did` (`hdid`) identifies the agent that possesses the skill, distinct from the common `author_did` (`adid`) which records the grain's writer. Bundled binary/file payloads use the common `content_refs` field (`cr`, §6.1); `license` uses the common `lic` key.
+
+| Full Name | Short Key | Type | Group |
+|-----------|-----------|------|-------|
+| `name` | `skname` | string | definition |
+| `instructions` | `instr` | string | definition |
+| `when_to_use` | `wtu` | string | definition |
+| `version` | `sver` | string | definition |
+| `allowed_tools` | `atls` | array[string] | definition |
+| `resources` | `res` | array[string] | definition |
+| `dependencies` | `deps` | array[string] | definition |
+| `input_modalities` | `imod` | array[string] | definition |
+| `output_modalities` | `omod` | array[string] | definition |
+| `domain` | `dom` | string | definition |
+| `holder_did` | `hdid` | string | learned |
+| `proficiency` | `prof` | float64 | learned |
+| `practice_count` | `prcnt` | int | learned |
+| `last_practiced_at` | `lpa` | int64 | learned |
+| `strategies` | `strat` | array[map] | learned |
+| `transferable` | `xfer` | bool | learned |
+
+### 6.13 Compaction Rules
 
 - Serializers MUST replace full field names with short keys before encoding
 - Deserializers MUST replace short keys with full field names after decoding
@@ -727,7 +751,7 @@ Multi-modal content (images, audio, video, embeddings, sensor data) is reference
 
 ## 8. Grain Types
 
-The `type` byte (Byte 2 of the fixed header) encodes the **cognitive grain type** — the class of knowledge unit this grain represents. Ten standard types are defined.
+The `type` byte (Byte 2 of the fixed header) encodes the **cognitive grain type** — the class of knowledge unit this grain represents. Eleven standard types are defined.
 
 ### Standard `mg:` Relation Vocabulary
 
@@ -756,7 +780,7 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:handed_off_to` | Event | Session handoff event record (§28.7) |
 | `mg:depends_on` | Goal | Task dependency (distinct from `parent_goals` hierarchy) |
 | `mg:assigned_to` | Goal | Task assigned to agent for execution |
-| `mg:capable_of` | Fact | Learned skill with proficiency and strategies (§28.8 Skill Convention) |
+| `mg:capable_of` | Skill | Learned skill with proficiency and strategies (§8.11; legacy Fact convention retained for back-compat) |
 
 ### 8.1 Fact (type = 0x01)
 
@@ -1010,6 +1034,48 @@ A DID-scoped, purpose-bounded permission grant or withdrawal. Four of six indust
 3. A withdrawn Consent grain is NOT deleted — both grant and withdrawal are retained for audit.
 4. Default `invalidation_policy.mode` for Consent grains is `"soft_locked"`.
 5. The `processing_basis` common field (§6.1) on any grain carries the content address of the Consent grain that authorized its creation — enabling GDPR Art. 17 erasure cascade.
+
+### 8.11 Skill (type = 0x0B)
+
+A reusable, self-contained agent capability — the durable definition of *what a capability is and how to perform it*, plus optional records of *how well a given agent performs it*. A Skill grain is the unit an agent loads to acquire a capability: a name, a description of when to use it, the procedural instructions, the tools it may invoke, the resources it bundles, and the other skills it depends on. The same type also carries optional **learned-competence** fields (`proficiency`, `practice_count`, strategies) so an agent can record and improve its mastery of a skill over time.
+
+This type promotes the §28.8 Skill Convention (formerly a `Fact + mg:capable_of` pattern) to a first-class grain, following the precedent set by Consent (§8.10). Skill grains became performance-critical for authoring, discovery, and transfer across multi-agent deployments, where the `object`-map convention was semantically correct but impractical to query at scale.
+
+Where an Agent Capability Fact (§28.5, `mg:has_capability`) is a static identity card of what an agent *is built to do*, and a Workflow (§8.4) is a single fixed procedure, a Skill is a packaged, transferable capability — optionally adaptive and practiced.
+
+**Required fields:**
+- `type` = "skill"
+- `name` (string) — machine-readable skill identifier (e.g., `"code_review"`)
+- `description` (string) — human-readable summary of what the skill does and when to use it
+- `created_at` (int64, epoch ms)
+
+**Optional — definition fields** (the durable, shareable specification):
+- `instructions` (string) — the procedural body: how to perform the skill (the prose/markdown "skill body" an agent loads when applying it)
+- `when_to_use` (string) — natural-language activation cue describing the conditions under which the skill SHOULD be selected (a discovery and routing signal)
+- `version` (string) — opaque, skill-defined version string (e.g., `"2.1.0"`). Supersession by system time remains authoritative for "latest" (§5).
+- `allowed_tools` (array[string]) — content addresses or identifiers of Tool definition grains (§27.1) the skill is permitted to invoke
+- `resources` (array[string]) — content addresses of bundled resource grains the skill ships with (scripts, templates, reference files). Binary or large file payloads are carried via the common `content_refs` field (§6.1).
+- `dependencies` (array[string]) — content addresses of Skill grains that must be available before this skill is effective
+- `input_modalities` (array[string]) — what the skill operates on: `"text"`, `"image"`, `"code"`, `"audio"`. Open enum.
+- `output_modalities` (array[string]) — what the skill produces. Open enum.
+- `domain` (string) — domain context: `"software"`, `"research"`, `"healthcare"`, `"finance"`. Open enum.
+
+**Optional — learned-competence fields** (a particular agent's mastery; omit for a pure definition):
+- `holder_did` (string) — DID of the agent that holds and practices this skill
+- `proficiency` (float64, [0.0, 1.0]) — current mastery level
+- `practice_count` (int) — number of successful applications (mirrors `success_count` in §6.1)
+- `last_practiced_at` (int64, epoch ms) — most recent successful application
+- `strategies` (array[map]) — context-dependent approaches. Each entry: `{condition: string, workflow: string, description?: string}`, where `workflow` is the content address of a Workflow grain (§8.4).
+- `transferable` (bool) — if `true`, another agent MAY ingest this grain and its referenced grains to acquire the skill
+- All common fields from §6.1 (e.g., `license`, `structural_tags`, `context` for arbitrary metadata)
+
+**Normative rules:**
+1. A Skill grain MAY be a pure **definition** (no `holder_did`/`proficiency`) or a held **instance** that adds learned-competence fields. `name` + `description` are sufficient to define a skill.
+2. When present, `proficiency` SHOULD equal the grain's top-level `confidence`.
+3. Learned-competence improvement is recorded by supersession: each change in `proficiency` writes a new Skill grain that supersedes the prior one and increments `practice_count`. The supersession chain is the complete learning history; Skill grains are never mutated in place. Degradation (e.g., when `last_practiced_at` exceeds an implementation threshold) is likewise realized by a superseding grain with reduced proficiency, not a mutation.
+4. Each `strategies[].workflow` MUST be the content address of a Workflow grain (§8.4). Each `dependencies` entry MUST be the content address of a Skill grain. Each `allowed_tools` entry SHOULD reference a Tool definition grain (§27.1).
+5. When an agent acquires a transferable skill, it writes a new Skill grain that sets `derived_from` to the source grain's content address, preserves the originating agent in `origin_did`, sets its own `holder_did` and `author_did`, and (for learned skills) resets `proficiency` and `practice_count` to the acquiring agent's initial values (typically `0`).
+6. Skill grains SHOULD use the `"agent:skills"` namespace to enable efficient discovery queries (see §28.8).
 
 ---
 
@@ -1761,7 +1827,7 @@ Implementations MUST declare which level they support:
 - Deserialize version byte + canonical MessagePack payload
 - Compute and verify SHA-256 content addresses
 - Support field compaction (short keys → full names)
-- Support all ten standard grain types (0x01–0x0A) per §8 schemas
+- Support all eleven standard grain types (0x01–0x0B) per §8 schemas
 - Ignore unknown fields
 - Constant-time hash comparison
 
@@ -2912,45 +2978,55 @@ When Agent A transfers control of a conversation to Agent B, the handoff is reco
 3. Agent B ingests the referenced grains, validates the delegation scope, and continues with a new `run_id` but the same `session_id`.
 4. When Agent B completes its task, it writes a Goal grain with `goal_state: "satisfied"` linked via `derived_from` to the delegation grain, and control returns to the agent specified in `return_to`.
 
-### 28.8 Skill Convention
+### 28.8 Skill Lifecycle and Transfer
 
-Agents that learn reusable capabilities SHOULD represent them as Fact grains with `relation: "mg:capable_of"` and a structured `object` map. A skill grain captures what an agent can do, how well it can do it, and the procedural knowledge needed to transfer the capability to another agent.
+Skills are represented by the dedicated **Skill grain (type 0x0B, §8.11)**. A Skill grain is a packaged, reusable capability: its **definition** fields (instructions, when-to-use, tools, resources, dependencies) specify what the capability is and how to perform it, while its optional **learned-competence** fields (proficiency, practice count, strategies) record how well a particular agent performs it. This section defines the conventions for authoring, lifecycle, transfer, and discovery; §8.11 defines the type's fields and normative rules.
+
+> **History:** Earlier OMS revisions described a `Fact + mg:capable_of` *convention* — a Fact grain whose `object` map carried the skill fields. OMS 1.4 promotes that pattern to a first-class Skill grain type (§8.11), following the Consent (§8.10) precedent. The `mg:capable_of` relation is retained in the vocabulary for backward compatibility, but new skills SHOULD be written as Skill grains.
 
 **Distinction from related constructs:**
 
 | Construct | Grain type | What it captures |
 |---|---|---|
 | Agent Capability (§28.5) | Fact (`mg:has_capability`) | Static identity card — what the agent *is built to do* |
-| Skill (§28.8) | Fact (`mg:capable_of`) | Learned capability — what the agent *has learned to do*, with proficiency and strategies |
+| Skill (§8.11, §28.8) | Skill (0x0B) | Packaged, reusable capability — the definition (how-to, tools, resources) plus optional learned proficiency and strategies |
 | Workflow (§8.4) | Workflow | Fixed action sequence — a single procedure, not an adaptive capability |
 
-**Convention:**
+**Example Skill grain:**
 ```json
 {
-  "type": "fact",
-  "subject": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
-  "relation": "mg:capable_of",
-  "object": {
-    "name": "code_review",
-    "description": "Review code changes for correctness, style, and security issues",
-    "proficiency": 0.82,
-    "strategies": [
-      {
-        "condition": "security_focused",
-        "workflow": "mg:sha256:a1b2c3...",
-        "description": "OWASP-oriented review for auth and input handling code"
-      },
-      {
-        "condition": "style_focused",
-        "workflow": "mg:sha256:d4e5f6...",
-        "description": "Linting and convention compliance review"
-      }
-    ],
-    "prerequisites": ["mg:sha256:f7e8d9..."],
-    "practice_count": 47,
-    "last_practiced_at": 1711929600000,
-    "transferable": true
-  },
+  "type": "skill",
+  "name": "code_review",
+  "description": "Review code changes for correctness, style, and security issues",
+  "version": "2.1.0",
+
+  "instructions": "Read the diff, classify the change, then apply the matching strategy. Always check auth and input-handling paths first.",
+  "when_to_use": "a pull request or code diff needs review before merge",
+  "allowed_tools": ["mg:sha256:b0c1d2..."],
+  "resources": ["mg:sha256:c3d4e5..."],
+  "dependencies": ["mg:sha256:f7e8d9..."],
+  "domain": "software",
+  "input_modalities": ["code", "text"],
+  "output_modalities": ["text"],
+
+  "holder_did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+  "proficiency": 0.82,
+  "practice_count": 47,
+  "last_practiced_at": 1711929600000,
+  "transferable": true,
+  "strategies": [
+    {
+      "condition": "security_focused",
+      "workflow": "mg:sha256:a1b2c3...",
+      "description": "OWASP-oriented review for auth and input handling code"
+    },
+    {
+      "condition": "style_focused",
+      "workflow": "mg:sha256:d4e5f6...",
+      "description": "Linting and convention compliance review"
+    }
+  ],
+
   "confidence": 0.82,
   "source_type": "agent_inferred",
   "namespace": "agent:skills",
@@ -2962,44 +3038,30 @@ Agents that learn reusable capabilities SHOULD represent them as Fact grains wit
 }
 ```
 
-The `object` map is an open schema. Standard keys:
+See §8.11 for the full field reference (required fields, optional fields, and compaction keys).
 
-| Key | Type | Description |
-|---|---|---|
-| `name` | string | Machine-readable skill identifier |
-| `description` | string | Human-readable summary of what the skill enables |
-| `proficiency` | float64, [0.0, 1.0] | Current mastery level. SHOULD equal the grain's top-level `confidence`. |
-| `strategies` | array[map] | Context-dependent approaches. Each entry: `{condition: string, workflow: string, description?: string}`. The `workflow` value is a content address of a Workflow grain (§8.4). |
-| `prerequisites` | array[string] | Content addresses of Skill Fact grains that must be acquired before this skill is effective |
-| `practice_count` | int | Number of successful applications (mirrors `success_count` in core fields) |
-| `last_practiced_at` | int64 | Epoch ms of most recent successful application |
-| `transferable` | bool | If `true`, another agent MAY ingest this grain and its referenced Workflow grains to acquire the skill |
-| `input_modalities` | array[string] | What the skill operates on: `"text"`, `"image"`, `"code"`, `"audio"`. Open enum. |
-| `output_modalities` | array[string] | What the skill produces |
-| `domain` | string | Domain context: `"software"`, `"research"`, `"healthcare"`, `"finance"`. Open enum. |
-
-**Namespace:** Skill Fact grains SHOULD use the `"agent:skills"` namespace to enable efficient discovery queries.
+**Namespace:** Skill grains SHOULD use the `"agent:skills"` namespace to enable efficient discovery queries.
 
 **Proficiency lifecycle:**
 
-1. **Acquisition.** When an agent first learns a capability, it writes a Skill Fact grain with an initial `proficiency` (typically low). The `derived_from` field SHOULD reference the grains (Events, Actions, Reasoning) that contributed to learning.
-2. **Improvement.** Each time proficiency changes, the agent supersedes the previous Skill Fact grain with an updated `proficiency` and incremented `practice_count`. The supersession chain provides a full learning history.
+1. **Acquisition.** When an agent first learns a capability, it writes a Skill grain with an initial `proficiency` (typically low). The `derived_from` field SHOULD reference the grains (Events, Tools, Reasoning) that contributed to learning.
+2. **Improvement.** Each time proficiency changes, the agent supersedes the previous Skill grain with an updated `proficiency` and incremented `practice_count`. The supersession chain provides a full learning history.
 3. **Degradation.** Implementations MAY decay proficiency over time if `last_practiced_at` exceeds a threshold. This is an index-layer concern, not a grain mutation — the store writes a new superseding grain with reduced proficiency.
 
 **Skill transfer between agents:**
 
-1. Agent A queries its store: `type=fact, relation="mg:capable_of", namespace="agent:skills", transferable=true`.
-2. Agent A shares the Skill Fact grain and all Workflow grains referenced in `strategies` with Agent B (via `get_batch` on the content addresses).
-3. Agent B ingests the grains, rewrites the Skill Fact with its own `author_did`, initial `proficiency: 0.0`, and `practice_count: 0`, and sets `derived_from` to Agent A's original Skill Fact content address. The `origin_did` field preserves Agent A's DID for provenance.
+1. Agent A queries its store: `type=skill, namespace="agent:skills", transferable=true`.
+2. Agent A shares the Skill grain and all Workflow grains referenced in `strategies` with Agent B (via `get_batch` on the content addresses).
+3. Agent B ingests the grains, rewrites the Skill grain with its own `holder_did` and `author_did`, initial `proficiency: 0.0`, and `practice_count: 0`, and sets `derived_from` to Agent A's original Skill grain content address. The `origin_did` field preserves Agent A's DID for provenance.
 4. Agent B improves proficiency through practice, superseding the skill grain as described above.
 
 **Skill discovery:**
 
-Agents discover available skills by querying: `type=fact, relation="mg:capable_of", namespace="agent:skills", system_valid_to=null, sort=proficiency DESC`.
+Agents discover available skills by querying: `type=skill, namespace="agent:skills", system_valid_to=null, sort=proficiency DESC`.
 
-To find agents capable of a specific skill: `type=fact, relation="mg:capable_of", object.name="code_review", system_valid_to=null`.
+To find agents that hold a specific skill: `type=skill, name="code_review", system_valid_to=null`.
 
-> **Note — promotion path:** If the convention approach proves insufficient — for instance, if skill queries become performance-critical across large multi-agent deployments, or if multiple domain profiles independently require skill-specific fields at the type level — a dedicated Skill grain type (`0x0B`) with its own required fields and type byte MAY be introduced in a future OMS version, following the precedent set by Consent (§8.10).
+> **Note — promotion realized:** Earlier OMS revisions modeled skills as a `Fact + mg:capable_of` convention and reserved a dedicated Skill grain type (`0x0B`) as a future promotion path, conditioned on skill queries becoming performance-critical across multi-agent deployments. OMS 1.4 realizes that promotion: Skill is now a first-class grain type (§8.11) with its own required fields and type byte, following the precedent set by Consent (§8.10).
 
 ### 28.9 CAL and SML — Companion Query and Markup Languages
 
@@ -3263,10 +3325,10 @@ version-byte  = %x01
 header-fields = flags-byte type-byte ns-hash-bytes created-at-bytes
                 ; version-byte + header-fields = 9-byte "fixed header" in §3.1
 flags-byte    = %x00-FF
-type-byte     = %x01-0A / %xF0-FF
+type-byte     = %x01-0B / %xF0-FF
                 ; Fact=0x01, Event=0x02, State=0x03, Workflow=0x04, Tool=0x05,
                 ; Observation=0x06, Goal=0x07, Reasoning=0x08, Consensus=0x09,
-                ; Consent=0x0A, 0x0B-0xEF reserved, 0xF0-0xFF domain profile types
+                ; Consent=0x0A, Skill=0x0B, 0x0C-0xEF reserved, 0xF0-0xFF domain profile types
 ns-hash-bytes = 2OCTET  ; uint16 big-endian, first two bytes of SHA-256(namespace)
 created-at-bytes = 4OCTET  ; uint32 big-endian
 
@@ -3463,6 +3525,31 @@ footer        = 32OCTET  ; SHA-256 checksum
 }
 ```
 
+**Skill-Specific Fields:**
+
+```json
+{
+  "skname": "name",
+  "instr": "instructions",
+  "wtu": "when_to_use",
+  "sver": "version",
+  "atls": "allowed_tools",
+  "res": "resources",
+  "deps": "dependencies",
+  "imod": "input_modalities",
+  "omod": "output_modalities",
+  "dom": "domain",
+  "hdid": "holder_did",
+  "prof": "proficiency",
+  "prcnt": "practice_count",
+  "lpa": "last_practiced_at",
+  "strat": "strategies",
+  "xfer": "transferable"
+}
+```
+
+> **Note:** `description` (`desc`) is shared with the Goal-specific table above; Skill grains reuse the same short key. Holder identity uses the Skill-specific `holder_did` (`hdid`), distinct from the common `author_did` (`adid`) which records the grain's writer. Bundled file payloads use the common `content_refs` (`cr`) field.
+
 **Content Reference Nested Compaction:**
 
 ```json
@@ -3596,6 +3683,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 - **Reasoning:** Grain type 0x08 — an inference chain, chain-of-thought, or decision rationale
 - **Consensus:** Grain type 0x09 — an agreement reached among multiple agents or sources
 - **Consent:** Grain type 0x0A — a data subject's GDPR/CCPA/LGPD/PIPL consent or withdrawal record
+- **Skill:** Grain type 0x0B — a packaged, reusable agent capability: a definition (instructions, when-to-use, tools, resources, dependencies) with optional learned-competence fields (proficiency, practice count, strategies)
 - **processing_basis:** Legal basis for processing personal data under GDPR Art. 6 (consent, contract, legal_obligation, vital_interests, public_task, legitimate_interests)
 - **consent_cascade:** Invalidation mode that propagates erasure/restriction to all grains linked via `processing_basis` when a Consent grain is invalidated
 - **verification_status:** Lifecycle verification state of a grain's content: `"unverified"` (default — not yet reviewed), `"verified"` (confirmed correct by an authority), `"contested"` (contradicted or disputed), `"retracted"` (withdrawn from use)
@@ -3656,7 +3744,7 @@ content_address = sha256(blob).hex()
 
 ---
 
-**Document Status:** This is a v1.4 revision of the .mg format specification. This revision renames grain type `0x01` from `belief` to `fact` and grain type `0x05` from `action` to `tool` (byte values unchanged — existing content addresses remain valid), redesigns the Workflow grain as a directed graph, and adds the `embedding_text` common field for retrieval. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
+**Document Status:** This is the v1.4 revision of the .mg format specification. This revision renames grain type `0x01` from `belief` to `fact` and grain type `0x05` from `action` to `tool` (byte values unchanged — existing content addresses remain valid), redesigns the Workflow grain as a directed graph, adds the `embedding_text` common field for retrieval, and adds the dedicated **Skill** grain type (`0x0B`, §8.11) — promoting the former §28.8 Skill Convention to a first-class type — for packaged, reusable agent capabilities. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
 **Last Updated:** 2026-06-12
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)

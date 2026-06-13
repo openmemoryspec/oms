@@ -118,7 +118,7 @@ The line between Tier 0/1 (in CAL) and Tier 2 (not in CAL) is: **can the operati
 
 ### 1.5 Relationship to OMS
 
-CAL operates on the 10 grain types defined by OMS v1.4: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
+CAL operates on the 11 grain types defined by OMS v1.4: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
 
 CAL extends the Store Protocol Convention defined in OMS §28.4 ([SPECIFICATION.md](./SPECIFICATION.md)) with a formal query language. Where OMS defines the `query`, `search`, and `supersede` store operations, CAL provides a structured, deterministic syntax for invoking them safely.
 
@@ -405,7 +405,8 @@ meta_field_name = "recall_priority" | "epistemic_status" | "verification_status"
 
 grain_field_name = event_field | state_field | workflow_field
                  | action_field | observation_field | goal_field
-                 | reasoning_field | consensus_field | consent_field ;
+                 | reasoning_field | consensus_field | consent_field
+                 | skill_field ;
 
 event_field     = "role" | "session_id" | "parent_message_id" | "model_id" | "content" ;
 state_field     = "context" | "plan" ;
@@ -417,6 +418,8 @@ reasoning_field = "reasoning_type" | "premises" | "conclusion" ;
 consensus_field = "threshold" | "agreement_count" | "participating_observers" ;
 consent_field   = "consent_action" | "purpose" | "grantor_did" | "grantee_did"
                 | "scope" | "expires_at" ;
+skill_field     = "name" | "version" | "domain" | "holder_did" | "proficiency"
+                | "transferable" | "practice_count" | "last_practiced_at" ;
 
 comparator      = "=" | "!=" | ">=" | "<=" | ">" | "<" ;
 
@@ -527,11 +530,13 @@ hash_literal    = "sha256:" , hex_char{8,64} ;
 identifier      = letter , { letter | digit | "_" } ;
 positive_integer = digit+ ;
 
-grain_type_plural   = "beliefs" | "events" | "states" | "workflows" | "actions"
-                    | "observations" | "goals" | "reasonings" | "consensuses" | "consents" ;
+grain_type_plural   = "facts" | "events" | "states" | "workflows" | "tools"
+                    | "observations" | "goals" | "reasonings" | "consensuses"
+                    | "consents" | "skills" ;
 
 grain_type_singular = "fact" | "event" | "state" | "workflow" | "tool"
-                    | "observation" | "goal" | "reasoning" | "consensus" | "consent" ;
+                    | "observation" | "goal" | "reasoning" | "consensus"
+                    | "consent" | "skill" ;
 ```
 
 ---
@@ -552,6 +557,7 @@ grain_type_singular = "fact" | "event" | "state" | "workflow" | "tool"
 | Reasoning | `reasonings` | `reasoning` | 0x08 |
 | Consensus | `consensuses` | `consensus` | 0x09 |
 | Consent | `consents` | `consent` | 0x0A |
+| Skill | `skills` | `skill` | 0x0B |
 
 ### 5.2 Common Field Types
 
@@ -704,9 +710,22 @@ All Fact fields are in the common set (`subject`, `relation`, `object`, `confide
 | `scope` | String | `=` | Consent scope identifier |
 | `expires_at` | Temporal | `=`, `BETWEEN` | Consent expiration |
 
+#### Skill (0x0B) -- `RECALL skills`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `name` | String | `=`, `!=`, `IN` | Machine-readable skill identifier (e.g., `"code_review"`) |
+| `version` | String | `=`, `IN` | Skill-defined version string (e.g., `"2.1.0"`) |
+| `domain` | String | `=`, `IN` | Domain context (e.g., `"software"`) |
+| `holder_did` | String | `=` | DID of the agent that holds the skill (learned instances) |
+| `proficiency` | Number | `=`, `>=`, `<=`, `>`, `<` | Mastery level [0.0, 1.0] (learned instances) |
+| `transferable` | Boolean | `=` | Whether the skill can be transferred to another agent |
+| `practice_count` | Number | `=`, `>=`, `<=`, `>`, `<` | Successful applications |
+| `last_practiced_at` | Temporal | `=`, `BETWEEN` | Most recent successful application |
+
 ### 6.4 Type-Specific ADD Extensions
 
-When adding Goal or Observation grains, type-specific fields are available in SET clauses:
+When adding Goal, Observation, or Skill grains, type-specific fields are available in SET clauses:
 
 ```sql
 ADD goal
@@ -727,6 +746,15 @@ ADD observation
   SET observer_type = "agent:activity-tracker"
   SET confidence = 0.7
   REASON "observed pattern across last 4 weeks"
+
+ADD skill
+  SET name = "code_review"
+  SET description = "Review code changes for correctness, style, and security issues"
+  SET instructions = "Read the diff, classify the change, then apply the matching strategy; check auth and input-handling paths first."
+  SET when_to_use = "a pull request or code diff needs review before merge"
+  SET version = "2.1.0"
+  SET domain = "software"
+  REASON "authoring reusable code-review skill definition"
 ```
 
 ### 6.5 Field Count Summary
@@ -743,6 +771,7 @@ ADD observation
 | Reasoning | 18 | 3 | 21 |
 | Consensus | 18 | 3 | 21 |
 | Consent | 18 | 6 | 24 |
+| Skill | 18 | 8 | 26 |
 | _(no type)_ | 18 | 0 | 18 |
 
 ---
@@ -773,6 +802,7 @@ OMS defines a standard `mg:` relation vocabulary. CAL provides first-class suppo
 | `mg:delegates_to` | Agency | Entity | Agent DID | Delegation |
 | `mg:owned_by` | Knowledge | Resource | Entity | Ownership |
 | `mg:has_capability` | Agency | Agent DID | Capability | Agent capability |
+| `mg:capable_of` | Agency | Agent DID | Skill | Learned skill (Skill grain, 0x0B) |
 | `mg:handed_off_to` | Interaction | Agent DID | Agent DID | Agent handoff |
 | `mg:depends_on` | Lifecycle | Goal | Goal | Goal dependency |
 | `mg:assigned_to` | Agency | Task | Agent DID | Task assignment |
@@ -787,7 +817,7 @@ CAL defines **relation category shortcuts** as syntactic sugar for common multi-
 | `relation IS KNOWLEDGE` | `relation IN ("mg:knows", "mg:infers")` |
 | `relation IS PERMISSION` | `relation IN ("mg:permits", "mg:revokes", "mg:prohibits")` |
 | `relation IS INTERACTION` | `relation IN ("mg:said", "mg:did", "mg:handed_off_to")` |
-| `relation IS AGENCY` | `relation IN ("mg:delegates_to", "mg:has_capability", "mg:assigned_to")` |
+| `relation IS AGENCY` | `relation IN ("mg:delegates_to", "mg:has_capability", "mg:capable_of", "mg:assigned_to")` |
 | `relation IS LIFECYCLE` | `relation IN ("mg:intends", "mg:depends_on")` |
 | `relation IS OBSERVATION` | `relation IN ("mg:perceives", "mg:state_at")` |
 
@@ -993,9 +1023,11 @@ ADD fact
   REASON "user stated preference during onboarding conversation"
 ```
 
-**Addable grain types:** Fact, Observation, Goal, Workflow. Events, Tools, States, and other types represent system-generated records and are not user-creatable.
+**Addable grain types:** Fact, Observation, Goal, Workflow, Skill. Events, Tools, States, and other types represent system-generated records and are not user-creatable.
 
 **Required SET fields (Fact):** `subject`, `relation`, `object`. `REASON` is mandatory.
+
+**Required SET fields (Skill):** `name`, `description`. `REASON` is mandatory.
 
 #### 8.8.1 ADD Workflow (Graph Syntax)
 
@@ -1192,7 +1224,7 @@ RECALL LIKE "machine learning best practices"
 ### 9.5 MY
 
 ```sql
-RECALL MY beliefs
+RECALL MY facts
 -- Desugars to: RECALL facts WHERE user_id = $current_user_id
 ```
 
@@ -1317,6 +1349,7 @@ Each grain type defines a **content rule** (what becomes the text content of the
 | **Workflow** | `nodes` (joined as readable text) | `trigger`? |
 | **Consensus** | `object` (the agreed claim) | `threshold`?, `count`? |
 | **Consent** | `purpose` | `action`, `grantor`, `grantee` |
+| **Skill** | `description` (what the skill enables) | `name`, `proficiency`?, `domain`? |
 
 Attributes marked with `?` are included at `standard` and `full` disclosure levels only, omitted at `summary` level.
 
@@ -1478,7 +1511,7 @@ FORMAT TEMPLATE {
 }
 ```
 
-**All 10 grain types rendered:**
+**All 11 grain types rendered:**
 ```sml
 <context intent="helping alice prepare her Q1 engineering review">
 
@@ -1509,6 +1542,8 @@ FORMAT TEMPLATE {
   <consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>
 
   <consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>
+
+  <skill name="metrics_review" proficiency="0.82" domain="software">summarise quarterly engineering metrics and surface the reliability narrative</skill>
 
 </context>
 ```
@@ -1588,7 +1623,7 @@ value1,value2,...
 ```
 
 Where:
-- `type` is the grain type (plural form, lowercase): `beliefs`, `events`, `goals`, etc.
+- `type` is the grain type (plural form, lowercase): `facts`, `events`, `goals`, etc.
 - `[N]` is the count of rows.
 - `{col1,col2,...}` are the projected field names.
 - The trailing `:` on the header is **required** by the TOON grammar (`header = [key] bracket-seg [fields-seg] ":"`).
@@ -1598,23 +1633,24 @@ Where:
 
 | Grain Type | Columns (standard disclosure) |
 |-----------|-------------------------------|
-| `beliefs` | `subject`, `content`, `confidence` |
+| `facts` | `subject`, `content`, `confidence` |
 | `events` | `role`, `time`, `content` |
 | `goals` | `subject`, `content`, `state` |
-| `actions` | `tool`, `phase`, `content` |
+| `tools` | `tool`, `phase`, `content` |
 | `observations` | `observer`, `content` |
 | `reasonings` | `type`, `content` |
 | `states` | `context`, `content` |
 | `workflows` | `trigger`, `content` |
 | `consensuses` | `threshold`, `count`, `content` |
 | `consents` | `grantor`, `grantee`, `action`, `content` |
+| `skills` | `name`, `content`, `proficiency` |
 
 At `summary` disclosure, `confidence`, `state`, `phase`, and `type` columns are omitted.
 At `full` disclosure, additional columns `source` and `observed` are appended.
 
 **Example — `RECALL facts ABOUT "alice" LIMIT 3 AS toon`:**
 ```
-beliefs[3]{subject,content,confidence}:
+facts[3]{subject,content,confidence}:
 alice,prefers dark mode,0.95
 alice,prefers vim,0.9
 alice,works best in deep-focus blocks of 90 minutes,0.82
@@ -1663,7 +1699,7 @@ Rules:
 context: agent_context
 intent: helping alice prepare her Q1 engineering review
 tokens: 1847/2000
-beliefs[3]{subject,content,confidence}:
+facts[3]{subject,content,confidence}:
   alice,prefers dark mode,0.95
   alice,prefers vim,0.9
   alice,works best in deep-focus blocks of 90 minutes,0.82
@@ -2058,7 +2094,7 @@ CAL/1 RECALL facts ABOUT "alice" WHERE confidence >= 0.8 RECENT 5 AS markdown
 {
   "cal_version": 1,
   "statement": "recall",
-  "grain_type": "beliefs",
+  "grain_type": "facts",
   "about": "alice",
   "where": [{ "field": "confidence", "op": ">=", "value": 0.8 }],
   "recent": 5,
@@ -2600,8 +2636,8 @@ It can read, assemble, and evolve memories, but never delete them.
   SUPERSEDE sha256:hash SET field = value [SET ...] REASON "why"
   REVERT sha256:hash REASON "why"
 
-### Types: beliefs, events, states, workflows, actions, observations, goals,
-           reasonings, consensuses, consents
+### Types: facts, events, states, workflows, tools, observations, goals,
+           reasonings, consensuses, consents, skills
 
 ### WHERE conditions (combine with AND):
   query = "search text"           -- semantic search
@@ -2639,7 +2675,7 @@ It can read, assemble, and evolve memories, but never delete them.
 
 ### Output formats:
   sml (default structured): flat tag-based — <fact subject="alice" confidence="0.92">prefers dark mode</fact>
-  toon: CSV-tabular, ~40% fewer tokens — beliefs[3]{subject,content,confidence}:\nalice,prefers dark mode,0.95
+  toon: CSV-tabular, ~40% fewer tokens — facts[3]{subject,content,confidence}:\nalice,prefers dark mode,0.95
   markdown: human-readable prose
   json: machine-readable structured data
   text: minimal plain text
@@ -2733,7 +2769,7 @@ All error codes use the `CAL-E` prefix.
 | CAL-E045 | NamespaceMismatch -- target grain in different namespace |
 | CAL-E046 | TargetNotFound -- target hash does not exist |
 | CAL-E050 | MissingRequiredField -- ADD requires subject, relation, object |
-| CAL-E051 | GrainTypeNotAddable -- only Fact, Observation, Goal can be created |
+| CAL-E051 | GrainTypeNotAddable -- only Fact, Observation, Goal, Workflow, Skill can be created |
 | CAL-E052 | AddQuotaExceeded -- too many ADD operations |
 
 ### Multi-Format Errors (CAL-E110, CAL-E113)
@@ -2933,12 +2969,12 @@ CHUNK, PAUSE, RESUME, CANCEL
 
 | Version | Date | Change |
 |---------|------|--------|
-| 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. |
+| 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. As part of the OMS v1.4 release, also adds the Skill grain type (`0x0B`) to the closed query set (`RECALL skills` / `ADD skill`, type-specific field set, `<skill>` projection, TOON columns, `mg:capable_of` in the `AGENCY` shortcut) and corrects `belief`/`action` literals the rename left behind (`grain_type_plural`, `RECALL MY`, TOON tables, `DESCRIBE` listing, `CAL-E051`). |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
 
 ---
 
-**Document Status:** This is the CAL (Context Assembly Language) Specification v1.0. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.4 — see [SPECIFICATION.md](./SPECIFICATION.md).
+**Document Status:** This is the CAL (Context Assembly Language) Specification v1.1. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.4 — see [SPECIFICATION.md](./SPECIFICATION.md).
 
 **Last Updated:** 2026-03-05
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
