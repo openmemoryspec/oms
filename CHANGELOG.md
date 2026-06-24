@@ -9,24 +9,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [Unreleased]
+## [1.4] — 2026-06-13
 
 ### Added
 
+- **Skill grain type (`0x0B`, §8.11)** — new dedicated cognitive grain type for packaged, reusable agent capabilities. Promotes the former §28.8 Skill Convention (a `Fact + mg:capable_of` pattern) to a first-class type, following the precedent set by Consent (§8.10). A Skill grain is **hybrid**: durable *definition* fields specify what the capability is and how to perform it, while optional *learned-competence* fields record a given agent's mastery. Required fields: `name`, `description`, `created_at`. Optional definition fields: `instructions`, `when_to_use`, `version`, `allowed_tools`, `resources`, `dependencies`, `input_modalities`, `output_modalities`, `domain`. Optional learned-competence fields: `holder_did`, `proficiency`, `practice_count`, `last_practiced_at`, `strategies` (each referencing a Workflow grain), `transferable`. A grain may be a pure definition (no `holder_did`/`proficiency`) or a held instance. Byte values `0x01`–`0x0A` are unchanged; existing content addresses remain valid.
+- **§6.12 Skill-Specific Fields** — compaction table for the Skill grain's type-specific fields, grouped definition/learned (`skname`, `instr`, `wtu`, `sver`, `atls`, `res`, `deps`, `imod`, `omod`, `dom`, `hdid`, `prof`, `prcnt`, `lpa`, `strat`, `xfer`). (Former §6.12 Compaction Rules renumbered to §6.13.)
+- **Skill compaction (Appendix C)** — added a Skill-Specific Fields compaction block.
 - **`embedding_text` common field (§6.1)** — optional `string` (compact key: `et`) providing source text for vector embedding and full-text indexing. When present, implementations SHOULD use this value instead of the grain's default per-type text representation. Enables document-derived grains to preserve source paragraph context for retrieval while maintaining structured subject/relation/object triples. Benchmarked at +29.4pp Recall@10 improvement on a 28-grain refund policy dataset. See `proposals/embedding-text-field.md`.
 - **Appendix C** — added `"et": "embedding_text"` to core field compaction table.
-- **Workflow grain type redesigned as directed graph (§8.4)** — Workflow grains now model directed graphs instead of flat step lists. New fields: `nodes` (array[string]), `edges` (array[map] with `src`, `dst`, `cond`, `max_cycles`), `bindings` (map[string→string] mapping node IDs to Action definition grain hashes), `retries` (map[string→int]). Supports sequential, parallel fork/join, conditional branching, and bounded cycles. Three-tier node-to-Action resolution (bound → named → abstract). Replaces `steps` array.
+- **Workflow grain type redesigned as directed graph (§8.4)** — Workflow grains now model directed graphs instead of flat step lists. New fields: `nodes` (array[string]), `edges` (array[map] with `src`, `dst`, `cond`, `max_cycles`), `bindings` (map[string→string] mapping node IDs to Tool definition grain hashes), `retries` (map[string→int]). Supports sequential, parallel fork/join, conditional branching, and bounded cycles. Three-tier node-to-Tool resolution (bound → named → abstract). Replaces `steps` array.
 - **Workflow structural semantics (§8.4)** — node types inferred from graph topology: fork (multiple outgoing edges), AND-join (multiple incoming edges), decision point (conditional edges), terminal (no outgoing edges). Entry point is first element of `nodes`.
 - **`mg:has_graph` relation** — replaces `mg:requires_steps` for Workflow grains. Reflects the directed graph model.
 
 ### Changed
 
+- **Type renames (breaking):** `"belief"` → `"fact"` (0x01), `"action"` → `"tool"` (0x05). Byte values unchanged; existing content addresses remain valid. The `Fact` grain is the (subject, relation, object) semantic triple with confidence; the `Tool` grain records tool/action invocations and executions. Updates the grain-type table (§5), the type-specific field headings, and the relation vocabulary. Legacy `"belief"`/`"action"` type strings are not accepted.
+- **§28.8 retitled** "Skill Convention" → "Skill Lifecycle and Transfer" — now defines lifecycle, transfer, and discovery over the dedicated Skill grain (§8.11) rather than the legacy `Fact + mg:capable_of` object-map pattern; discovery/transfer queries use `type=skill`. `mg:capable_of` now maps to the Skill grain in the §8 relation vocabulary (retained for backward compatibility).
+- **Grain-type table (§3.1), glossary, ABNF/CDDL `type-byte`, and conformance Level 1** updated to include Skill (`0x0B`); reserved range narrowed to `0x0C–0xEF`.
 - **Workflow grain description** — "Learned action sequence — procedural memory" → "Directed graph of procedural steps — plans, pipelines, processes".
 - **Workflow fields** — `steps` (array[string]) and `trigger` (string) replaced by `nodes`, `edges`, `bindings`, `retries`, and optional `trigger`. Edge schema uses nested `src`/`dst`/`cond`/`max_cycles` fields with compaction keys.
 - **`mg:requires_steps`** renamed to **`mg:has_graph`** in the `mg:` standard relation vocabulary.
 
 ### CAL 1.1 — Added
 
+- **Skill grain support** — `skill`/`skills` added to the closed grain-type set (§5.1); `RECALL skills` with type-specific fields (`name`, `version`, `domain`, `holder_did`, `proficiency`, `transferable`, `practice_count`, `last_practiced_at`); `ADD skill` (required SET fields `name`, `description`); `<skill>` content-projection rule; TOON column set; field-count row. Grammar productions `grain_type_plural`, `grain_type_singular`, `grain_field_name`, and new `skill_field` updated. `mg:capable_of` added to the `AGENCY` relation-category shortcut.
 - **Multi-format output (§10.1.1)** — `FORMAT` and `AS` clauses now accept bracketed format lists (`FORMAT [markdown, json]`) with optional aliases (`FORMAT [json AS structured, markdown AS report]`). Single query execution produces multiple renderings. New multi-format response shape (`"formats"` object, §14.2.1). Maximum 5 formats per list. New error codes: `CAL-E110` (too many formats), `CAL-E113` (duplicate format key).
 - **Workflow graph syntax for ADD/SUPERSEDE (§8.8.1)** — dedicated graph syntax for workflow grains using `->` (sequential edges), `()` (parallel fork/join), `WHEN` (conditional edges), `* N` (retry bounds), `BIND` (node-to-Action mapping), and `ON` (trigger clause). Full graph replacement on SUPERSEDE.
 - **`BECAUSE` alias** — accepted as synonym for `REASON` in ADD, SUPERSEDE, and workflow statements.
@@ -36,7 +43,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 - **Pipeline operators removed** — bare pipe syntax (`| ORDER BY`, `| LIMIT`, `| COUNT`, etc.) replaced by direct clause syntax (`ORDER BY`, `LIMIT`, `COUNT`). All examples and grammar productions updated. Backward-compatible at the semantic level.
 - **Workflow query fields** — `steps` field replaced by `node` and `binding` for grain-type-specific querying.
 - **Workflow content projection** — `nodes` joined with `->` arrow syntax replaces numbered `steps` list in SML/template output.
-- **`GrainTypeNotAddable` (CAL-E051)** — Workflow added to the set of addable grain types (Belief, Observation, Goal, Workflow).
+- **`GrainTypeNotAddable` (CAL-E051)** — addable grain-type set is now Fact, Observation, Goal, Workflow, Skill; the error message was updated to match.
+
+### CAL 1.1 — Fixed
+
+- **Stale `belief`/`action` literals** — corrected leftovers the rename missed: `grain_type_plural` (`beliefs`/`actions` → `facts`/`tools`), `RECALL MY beliefs` → `RECALL MY facts`, the TOON column table and examples, and a `"grain_type": "beliefs"` JSON example.
+
+### SML — Added
+
+- **`<skill>` element** — new tag mapping to the Skill grain; added to the all-grain-types comprehensive example. Default content is the skill `description`; default attributes `name`, `proficiency`?, `domain`?.
 
 ---
 

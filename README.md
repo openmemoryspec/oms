@@ -1,6 +1,6 @@
 # Open Memory Specification (OMS)
 
-**Version:** 1.3 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
+**Version:** 1.4 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
 
 Backed by [areev.ai](https://areev.ai).
 
@@ -16,7 +16,7 @@ OMS is an open standard for portable, auditable, and interoperable agent memory.
 
 ## OMS — The Memory Format
 
-OMS defines the **Memory Grain (`.mg`) container** — a binary format for immutable, content-addressed knowledge units called *grains*. A memory grain is the atomic unit of agent knowledge: a single immutable belief, event, observation, or decision record, identified by the SHA-256 hash of its canonical binary representation.
+OMS defines the **Memory Grain (`.mg`) container** — a binary format for immutable, content-addressed knowledge units called *grains*. A memory grain is the atomic unit of agent knowledge: a single immutable fact, event, observation, or decision record, identified by the SHA-256 hash of its canonical binary representation.
 
 Think of the `.mg` container as what JSON is to APIs or `.git` objects are to version control — a universal, language-agnostic, self-describing interchange format for agent memory.
 
@@ -38,16 +38,17 @@ Think of the `.mg` container as what JSON is to APIs or `.git` objects are to ve
 
 | Type | Byte | Description |
 |------|------|-------------|
-| Belief | `0x01` | Declarative knowledge: subject–relation–object triple |
+| Fact | `0x01` | Declarative knowledge: subject–relation–object triple |
 | Event | `0x02` | Timestamped occurrence: message, interaction, or utterance |
 | State | `0x03` | Agent state snapshot at a point in time |
 | Workflow | `0x04` | Directed graph of procedural steps |
-| Action | `0x05` | Tool invocation or code execution |
+| Tool | `0x05` | Tool invocation or code execution |
 | Observation | `0x06` | Sensor or cognitive input |
 | Goal | `0x07` | Intent, objective, or desired outcome |
 | Reasoning | `0x08` | Inference chain and thought audit trail |
 | Consensus | `0x09` | Multi-agent agreement record |
 | Consent | `0x0A` | DID-scoped permission grant or withdrawal |
+| Skill | `0x0B` | Packaged, reusable agent capability: definition plus optional learned proficiency |
 | `0xF0–0xFF` | — | Application-defined domain profile types |
 
 ### Blob Layout
@@ -108,7 +109,7 @@ A support agent handles an inbound ticket: *"My invoice shows a charge I don't r
 CAL/1 ASSEMBLE support_context
   FOR "resolving billing dispute for customer:priya"
   FROM
-    profile:   (RECALL beliefs  ABOUT "customer:priya"
+    profile:   (RECALL facts  ABOUT "customer:priya"
                 WHERE relation IS KNOWLEDGE
                 LIMIT 10),
     history:   (RECALL events
@@ -119,10 +120,10 @@ CAL/1 ASSEMBLE support_context
                 WHERE subject = "customer:priya"
                   AND tags INCLUDE ["support:billing"]
                 RECENT 5),
-    policy:    (RECALL beliefs
+    policy:    (RECALL facts
                 WHERE tags INCLUDE ["policy:billing"]
                 LIMIT 5),
-    session:   (RECALL actions
+    session:   (RECALL tools
                 WHERE session_id = "sess-20260303-priya"
                 LIMIT 10)
   BUDGET 4000 tokens
@@ -160,13 +161,13 @@ CAL/1 RECALL workflows
 
 ## SML — Semantic Markup Language
 
-SML is the output format produced by CAL `ASSEMBLE FORMAT sml`. It is a **flat, tag-based markup format** designed for direct LLM consumption. Tag names are OMS grain types (`<belief>`, `<event>`, `<reasoning>`, …). The tag tells the LLM the epistemic status of the content; the attributes carry decision metadata; the element text is natural-language prose.
+SML is the output format produced by CAL `ASSEMBLE FORMAT sml`. It is a **flat, tag-based markup format** designed for direct LLM consumption. Tag names are OMS grain types (`<fact>`, `<event>`, `<reasoning>`, …). The tag tells the LLM the epistemic status of the content; the attributes carry decision metadata; the element text is natural-language prose.
 
 SML is **not XML**. It requires no parser, no schema, no escape sequences. An LLM reads it the same way a person reads a well-structured document.
 
 ### Structural Rules
 
-1. **Tag names are grain types.** `<belief>`, `<goal>`, `<event>`, `<action>`, `<observation>`, `<reasoning>`, `<state>`, `<workflow>`, `<consensus>`, `<consent>` — no others.
+1. **Tag names are grain types.** `<fact>`, `<goal>`, `<event>`, `<tool>`, `<observation>`, `<reasoning>`, `<state>`, `<workflow>`, `<consensus>`, `<consent>`, `<skill>` — no others.
 2. **Flat only.** No nesting beyond the `<context>` envelope.
 3. **No storage internals.** No hashes, namespaces, or OMS metadata in the output.
 4. **Natural language content.** Element text is prose, not decomposed triples.
@@ -179,9 +180,9 @@ This is the SML block injected into the LLM system prompt for the billing disput
 ```sml
 <context intent="resolving billing dispute for customer:priya">
 
-  <belief subject="customer:priya" confidence="0.97">account tier is Professional, annual billing cycle</belief>
-  <belief subject="customer:priya" confidence="0.93">primary contact email is priya@example.com</belief>
-  <belief subject="customer:priya" confidence="0.89">enrolled in auto-renewal since 2024-03-01</belief>
+  <fact subject="customer:priya" confidence="0.97">account tier is Professional, annual billing cycle</fact>
+  <fact subject="customer:priya" confidence="0.93">primary contact email is priya@example.com</fact>
+  <fact subject="customer:priya" confidence="0.89">enrolled in auto-renewal since 2024-03-01</fact>
 
   <event role="user"  time="2m ago">My invoice shows a charge I don't recognise — $299 on 28 Feb.</event>
   <event role="agent" time="2m ago">Looking into that now, Priya. Retrieving your billing history.</event>
@@ -190,8 +191,8 @@ This is the SML block injected into the LLM system prompt for the billing disput
 
   <workflow trigger="billing_dispute_opened" state="open">verify_charge -> check_renewal_date -> explain_or_escalate -> offer_billing_cycle_change -> close_ticket</workflow>
 
-  <action tool="get_invoice"    phase="completed">retrieved invoice INV-2026-02-28: $299 annual Professional plan renewal</action>
-  <action tool="get_plan_history" phase="completed">plan enrolled 2024-03-01, renewed annually; last renewal 2026-02-28</action>
+  <tool tool="get_invoice"    phase="completed">retrieved invoice INV-2026-02-28: $299 annual Professional plan renewal</tool>
+  <tool tool="get_plan_history" phase="completed">plan enrolled 2024-03-01, renewed annually; last renewal 2026-02-28</tool>
 
   <observation observer="billing-system">renewal processed automatically on 2026-02-28 at 00:01 UTC; no failed payment</observation>
   <observation observer="system">customer last viewed billing page 2026-01-15</observation>
@@ -199,7 +200,7 @@ This is the SML block injected into the LLM system prompt for the billing disput
   <reasoning type="deductive">charge is the annual plan renewal; customer enrolled in auto-renewal; charge is valid</reasoning>
   <reasoning type="abductive">customer may be unaware of annual cycle because last billing interaction was January — explain renewal cadence before offering monthly switch</reasoning>
 
-  <belief subject="policy:billing" confidence="1.0">customers may switch billing cycle within 30 days of renewal with pro-rated refund</belief>
+  <fact subject="policy:billing" confidence="1.0">customers may switch billing cycle within 30 days of renewal with pro-rated refund</fact>
 
   <consent action="granted" grantor="customer:priya" grantee="support-agent">access billing records and invoice history for dispute resolution</consent>
 
@@ -214,9 +215,9 @@ SML metadata density is controlled by disclosure level — the element shape nev
 
 | Level | Example |
 |-------|---------|
-| `summary` | `<belief subject="customer:priya">enrolled in auto-renewal</belief>` |
-| `standard` | `<belief subject="customer:priya" confidence="0.89">enrolled in auto-renewal since 2024-03-01</belief>` |
-| `full` | `<belief subject="customer:priya" confidence="0.89" source="crm" observed="14d ago">enrolled in auto-renewal since 2024-03-01</belief>` |
+| `summary` | `<fact subject="customer:priya">enrolled in auto-renewal</fact>` |
+| `standard` | `<fact subject="customer:priya" confidence="0.89">enrolled in auto-renewal since 2024-03-01</fact>` |
+| `full` | `<fact subject="customer:priya" confidence="0.89" source="crm" observed="14d ago">enrolled in auto-renewal since 2024-03-01</fact>` |
 
 ---
 
