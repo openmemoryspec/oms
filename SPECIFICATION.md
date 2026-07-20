@@ -1,7 +1,7 @@
 # Open Memory Specification (OMS)
 ## Memory Grain (.mg) Container Definition
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** Standards Track
 **Category:** Data Formats
 **Date:** June 2026
@@ -68,7 +68,7 @@ A memory grain is the atomic unit of agent knowledge—a single immutable fact, 
 
 The .mg container format is to autonomous systems what JSON is to APIs and .git objects are to version control: a universal, language-agnostic, self-describing interchange format. It is the foundational wire format of OMS.
 
-**CAL (Context Assembly Language)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) and **SML (Semantic Markup Language)** ([SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md)) are part of OMS v1.4. CAL defines the query and context-assembly layer that operates on OMS stores; SML is CAL's default output format for LLM context consumption. See §1.5 for details.
+**CAL (Context Assembly Language)** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md)) and **SML (Semantic Markup Language)** ([SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md](./SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md)) are part of OMS v1.5. CAL defines the query and context-assembly layer that operates on OMS stores; SML is CAL's default output format for LLM context consumption. See §1.5 for details.
 
 ---
 
@@ -138,7 +138,7 @@ OMS addresses this gap by defining a universal standard for knowledge interchang
 
 ### 1.5 Companion Specifications
 
-OMS defines the wire format and grain semantics. Two companion specifications are part of the OMS v1.4 release and are included in this repository:
+OMS defines the wire format and grain semantics. Two companion specifications are part of the OMS v1.5 release and are included in this repository:
 
 **CAL — Context Assembly Language** ([CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md))
 
@@ -208,7 +208,8 @@ Hexadecimal values are lowercase. Byte sequences are represented in hex with spa
 | 0x09 | **Consensus** | Multi-agent agreement record |
 | 0x0A | **Consent** | Permission grant or withdrawal — DID-scoped, purpose-bounded |
 | 0x0B | **Skill** | Packaged, reusable agent capability — definition (how-to, tools, resources) plus optional learned proficiency |
-| 0x0C–0xEF | Reserved | Future standard types |
+| 0x0C | **Recommendation** | Governed, auditable proposal to change memory or agent configuration — reviewed, applied, and rollback-able |
+| 0x0D–0xEF | Reserved | Future standard types |
 | 0xF0–0xFF | Domain profile types | Application-defined per Appendix A domain profiles |
 
 **Bytes 3-4 — Namespace Hash:** First two bytes of SHA-256(namespace), encoded as `uint16` big-endian. Provides 65,536 routing buckets without deserialization. Full namespace string remains authoritative in payload. This field is a routing hint only and MUST NOT be used for security decisions (see §13.3, §20).
@@ -660,7 +661,24 @@ When a Goal or Fact grain uses the `mg:delegates_to` relation, the following fie
 | `strategies` | `strat` | array[map] | learned |
 | `transferable` | `xfer` | bool | learned |
 
-### 6.13 Compaction Rules
+### 6.13 Recommendation-Specific Fields
+
+> **Note:** A Recommendation reuses common fields for evidence and scoring — `derived_from` (`df`, evidence hashes), `confidence` (`c`), `importance` (`im`), and `valid_to` (`vt`, expiry). The review state (`rec_status`) is an index-layer cache reconstructed from the audit chain (§8.12.1) and is **not** a compacted blob field.
+
+| Full Name | Short Key | Type |
+|-----------|-----------|------|
+| `target_ref` | `tref` | string |
+| `analyzer` | `anlz` | map |
+| `summary` | `summ` | map |
+| `dedup_key` | `ddk` | string |
+| `proposal_cal` | `pcal` | string |
+| `proposal_edit` | `pedit` | map |
+| `proposal_data` | `pdata` | map |
+| `severity` | `sev` | string |
+| `metric_snapshot` | `msnap` | map |
+| `evidence_query` | `evq` | string |
+
+### 6.14 Compaction Rules
 
 - Serializers MUST replace full field names with short keys before encoding
 - Deserializers MUST replace short keys with full field names after decoding
@@ -751,7 +769,7 @@ Multi-modal content (images, audio, video, embeddings, sensor data) is reference
 
 ## 8. Grain Types
 
-The `type` byte (Byte 2 of the fixed header) encodes the **cognitive grain type** — the class of knowledge unit this grain represents. Eleven standard types are defined.
+The `type` byte (Byte 2 of the fixed header) encodes the **cognitive grain type** — the class of knowledge unit this grain represents. Twelve standard types are defined.
 
 ### Standard `mg:` Relation Vocabulary
 
@@ -1076,6 +1094,54 @@ Where an Agent Capability Fact (§28.5, `mg:has_capability`) is a static identit
 4. Each `strategies[].workflow` MUST be the content address of a Workflow grain (§8.4). Each `dependencies` entry MUST be the content address of a Skill grain. Each `allowed_tools` entry SHOULD reference a Tool definition grain (§27.1).
 5. When an agent acquires a transferable skill, it writes a new Skill grain that sets `derived_from` to the source grain's content address, preserves the originating agent in `origin_did`, sets its own `holder_did` and `author_did`, and (for learned skills) resets `proficiency` and `practice_count` to the acquiring agent's initial values (typically `0`).
 6. Skill grains SHOULD use the `"agent:skills"` namespace to enable efficient discovery queries (see §28.8).
+
+### 8.12 Recommendation (type = 0x0C)
+
+A governed, auditable **proposal to change memory or agent configuration** — the unit a self-improvement or curation layer emits, reviews, applies, and can roll back. A Recommendation grain names a *target* (a grain, entity, saved query, template, document, or host object), the *analyzer* that produced it, a deterministic *summary*, and exactly one *proposal* describing the change (a batch of CAL evolve-writes, a document edit, or an opaque host-config change). It never mutates memory by itself: it enters a review lifecycle (§8.12.1) whose transitions are recorded as immutable audit Observation grains, and only an approved-and-applied recommendation changes the store.
+
+This type is realized from the OMS `0x0C–0xEF` reserved range, following the precedent set by Skill (§8.11, from `0x0B`) and Consent (§8.10). It became a dedicated type because governed self-improvement — propose → review → apply → measure → roll back — needs a first-class, portable, content-addressed record of *what an autonomous layer wants to change and why*, with a tamper-evident audit trail; the `Fact + mg:proposes` pattern is expressible but impractical when the proposal queue, its dedup identity, and its audit chain are trust- and compliance-critical.
+
+Where a Reasoning grain (§8.8) records *why the agent believes something* and a Goal (§8.7) records *what the agent intends*, a Recommendation records *a specific, reviewable change an analysis layer proposes to the memory or the agent itself* — bounded by evidence and gated by review.
+
+**Required fields:**
+- `type` = "recommendation"
+- `target_ref` (string) — the change target as `<scheme>:<opaque>`. Standard schemes: `grain:sha256:<hash>` (a specific grain), `entity:<namespace>/<subject>` (an entity), `query:<namespace>/<name>` (a saved query), `template:<namespace>/<name>` (a template), `doc:<host-id>` (a host document, e.g. `doc:claude.md`), `host:<opaque>` (an opaque host object). The scheme is the target-kind discriminator; the scheme set is open for host-defined targets.
+- `analyzer` (map) — the producing logic: `{id: string, params?: map}`, where `id` is a versioned identifier `publisher.name/major` (e.g. `"waiser.duplicate_sweep/1"`) and `params` is an optional snapshot of the parameters it ran with. Full "why" provenance without a second grain.
+- `summary` (map) — a deterministic, template-rendered description: `{template_id: string, args: map}`. An analyzer MUST NOT store free prose here; the human-readable string is produced by rendering `template_id` with `args`, so summaries stay reproducible and translatable.
+- `dedup_key` (string) — the recommendation's stable proposal identity, computed (never author-chosen) per normative rule 5. Two recommendations with the same `dedup_key` are the same proposal; a supersession chain (evidence refresh, a growing cluster) shares one `dedup_key` across all of its content addresses.
+- exactly one **proposal** field:
+  - `proposal_cal` (string) — a CAL batch of Tier-1 "evolve" writes (`ADD`/`SUPERSEDE`; MAY additionally contain `FORGET`, §6.4). The standard non-destructive change form.
+  - `proposal_edit` (map) — `{format: string, base_digest: string, diff: string}` for `doc:` targets; `base_digest` lets an applier detect a stale base before editing.
+  - `proposal_data` (map) — an opaque host-config change for `host:` targets.
+- `created_at` (int64, epoch ms)
+
+**Optional fields:**
+- `severity` (string) — `"info"`, `"low"`, `"medium"`, or `"high"`. Advisory triage signal.
+- `metric_snapshot` (map) — the measurable claim the recommendation rests on, for later outcome review: `{metric: string, baseline: number, unit?: string, n?: int, window?: string, query?: string, review_after?: int64}`, where `query` is a CAL expression that reproduces the measurement and `review_after` is the epoch-ms checkpoint to re-measure at.
+- `evidence_query` (string) — a CAL query that regenerates the full evidence set when `derived_from` is truncated to a representative subset (see below).
+- All common fields from §6.1. In particular a Recommendation reuses:
+  - `derived_from` — the **evidence**: content addresses of the grains the recommendation is grounded in (bounded to a representative set, RECOMMENDED ≤ 64; `evidence_query` regenerates the full set). Provenance traversal (§23.6) works unchanged.
+  - `confidence` — the reviewer/verifier's calibrated credence that the recommendation is correct and useful.
+  - `importance` — triage weighting.
+  - `valid_to` — when the recommendation expires; expiry is computed from `valid_to`, never by a background daemon.
+
+**Lifecycle status (index-layer):** A recommendation's review state (`rec_status` ∈ `pending | approved | rejected | applied | rolled_back | expired`) is **not stored in the .mg blob**. Like `superseded_by` and `verification_status` (§6.1, §5.6) it is a rebuildable index-layer cache derived from the authoritative audit chain (§8.12.1). The recommendation's content address is therefore **stable for its whole life** — a host holds one identifier from propose to rollback — and a plain `write` / `SUPERSEDE … SET` MUST NOT be able to forge a status.
+
+#### 8.12.1 Lifecycle and audit
+
+- **Authoritative record.** Each lifecycle transition is one immutable **audit Observation grain** (§8.6) hash-chained per recommendation: its `derived_from` includes the recommendation's content address and the previous audit grain's address (plus any result addresses). Each audit grain carries a host-asserted `actor` label (e.g. `"user:alice"`, `"agent:worker-3"`, `"policy:auto"`), an `observer_type` ∈ `{human, agent, policy, system}`, and a mandatory human-readable reason (RECOMMENDED ≤ 500 chars). The chain is portable, tamper-evident, and fork-mergeable.
+- **State machine.** `pending → approved | rejected`; `approved → applied`; `applied → rolled_back`. `pending → applied` directly is permitted **only** when `actor` denotes a policy principal (auto-apply). `expired` is computed from `valid_to`.
+- **Content vs. lifecycle.** A change in the recommendation's *content* (refreshed evidence, a larger cluster) is a **supersession** of the grain — a new content address with the **same `dedup_key`** — not a status change. Lifecycle ≠ content.
+- **Reproducible undo.** The inverse of an applied proposal is derived at apply time and recorded on the applied audit grain as a store-operation plan (no new CAL syntax): a `SUPERSEDE` reinstates the prior content; an `ADD` is undone by tombstoning the added grain so it truly leaves the recall path; a document edit supersedes back to the prior head. A `FORGET` has no inverse — a recommendation whose proposal contains `FORGET` is not rollbackable.
+
+**Normative rules:**
+1. Exactly one of `proposal_cal`, `proposal_edit`, `proposal_data` MUST be present.
+2. Recommendation grains MUST NOT be mutated in place; every content change is a supersession, every lifecycle transition an audit Observation grain (§8.6). The `rec_status` index-layer cache MUST be reconstructible from the audit chain alone.
+3. Lifecycle-derived state MUST NOT be writer-settable: `rec_status` is not a blob field, and a `SUPERSEDE … SET` targeting a status field MUST be rejected. Transitions occur only through the review/apply path that emits audit grains.
+4. `summary.template_id` MUST reference a deterministic template and `summary.args` MUST carry the values it interpolates; implementations MUST NOT store analyzer-authored free prose in `summary`.
+5. `dedup_key` MUST be computed as the NFC- and case-fold-normalized identity `(analyzer-family, target_ref, action-kind)`, where **`analyzer-family` is `analyzer.id` with the `/major` suffix removed** (so bumping `.../1` → `.../2` does not re-propose the queue as novel — the exact version stays in `analyzer.id`) and **action-kind** is the proposal variant (`cal` | `edit` | `data`). `dedup_key` MUST NOT incorporate the proposal body or the evidence, so that a content refresh supersedes rather than re-proposes.
+6. Each `derived_from` entry SHOULD be the content address of a grain the recommendation is grounded in; when present, `evidence_query` MUST regenerate the full evidence set.
+7. Recommendation grains SHOULD use a dedicated namespace (e.g. `"agent:recommendations"`) to keep the proposal queue efficiently discoverable and separable from user memory.
 
 ---
 
@@ -1827,7 +1893,7 @@ Implementations MUST declare which level they support:
 - Deserialize version byte + canonical MessagePack payload
 - Compute and verify SHA-256 content addresses
 - Support field compaction (short keys → full names)
-- Support all eleven standard grain types (0x01–0x0B) per §8 schemas
+- Support all twelve standard grain types (0x01–0x0C) per §8 schemas
 - Ignore unknown fields
 - Constant-time hash comparison
 
@@ -3325,10 +3391,11 @@ version-byte  = %x01
 header-fields = flags-byte type-byte ns-hash-bytes created-at-bytes
                 ; version-byte + header-fields = 9-byte "fixed header" in §3.1
 flags-byte    = %x00-FF
-type-byte     = %x01-0B / %xF0-FF
+type-byte     = %x01-0C / %xF0-FF
                 ; Fact=0x01, Event=0x02, State=0x03, Workflow=0x04, Tool=0x05,
                 ; Observation=0x06, Goal=0x07, Reasoning=0x08, Consensus=0x09,
-                ; Consent=0x0A, Skill=0x0B, 0x0C-0xEF reserved, 0xF0-0xFF domain profile types
+                ; Consent=0x0A, Skill=0x0B, Recommendation=0x0C,
+                ; 0x0D-0xEF reserved, 0xF0-0xFF domain profile types
 ns-hash-bytes = 2OCTET  ; uint16 big-endian, first two bytes of SHA-256(namespace)
 created-at-bytes = 4OCTET  ; uint32 big-endian
 
@@ -3550,6 +3617,25 @@ footer        = 32OCTET  ; SHA-256 checksum
 
 > **Note:** `description` (`desc`) is shared with the Goal-specific table above; Skill grains reuse the same short key. Holder identity uses the Skill-specific `holder_did` (`hdid`), distinct from the common `author_did` (`adid`) which records the grain's writer. Bundled file payloads use the common `content_refs` (`cr`) field.
 
+**Recommendation-Specific Fields:**
+
+```json
+{
+  "tref": "target_ref",
+  "anlz": "analyzer",
+  "summ": "summary",
+  "ddk": "dedup_key",
+  "pcal": "proposal_cal",
+  "pedit": "proposal_edit",
+  "pdata": "proposal_data",
+  "sev": "severity",
+  "msnap": "metric_snapshot",
+  "evq": "evidence_query"
+}
+```
+
+> **Note:** Evidence and scoring reuse common fields — `derived_from` (`df`), `confidence` (`c`), `importance` (`im`), `valid_to` (`vt`). The review state (`rec_status`) is an index-layer cache rebuilt from the audit chain (§8.12.1), not a compacted blob field.
+
 **Content Reference Nested Compaction:**
 
 ```json
@@ -3684,6 +3770,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 - **Consensus:** Grain type 0x09 — an agreement reached among multiple agents or sources
 - **Consent:** Grain type 0x0A — a data subject's GDPR/CCPA/LGPD/PIPL consent or withdrawal record
 - **Skill:** Grain type 0x0B — a packaged, reusable agent capability: a definition (instructions, when-to-use, tools, resources, dependencies) with optional learned-competence fields (proficiency, practice count, strategies)
+- **Recommendation:** Grain type 0x0C — a governed, auditable proposal to change memory or agent configuration: a target, the producing analyzer, a deterministic summary, and one proposal (CAL evolve-batch, doc edit, or host-config change). Enters a propose → review → apply → roll-back lifecycle whose transitions are immutable audit Observation grains; its review state is an index-layer cache
 - **processing_basis:** Legal basis for processing personal data under GDPR Art. 6 (consent, contract, legal_obligation, vital_interests, public_task, legitimate_interests)
 - **consent_cascade:** Invalidation mode that propagates erasure/restriction to all grains linked via `processing_basis` when a Consent grain is invalidated
 - **verification_status:** Lifecycle verification state of a grain's content: `"unverified"` (default — not yet reviewed), `"verified"` (confirmed correct by an authority), `"contested"` (contradicted or disputed), `"retracted"` (withdrawn from use)
@@ -3744,7 +3831,7 @@ content_address = sha256(blob).hex()
 
 ---
 
-**Document Status:** This is the v1.4 revision of the .mg format specification. This revision renames grain type `0x01` from `belief` to `fact` and grain type `0x05` from `action` to `tool` (byte values unchanged — existing content addresses remain valid), redesigns the Workflow grain as a directed graph, adds the `embedding_text` common field for retrieval, and adds the dedicated **Skill** grain type (`0x0B`, §8.11) — promoting the former §28.8 Skill Convention to a first-class type — for packaged, reusable agent capabilities. Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
+**Document Status:** This is the v1.5 revision of the .mg format specification. It adds the dedicated **Recommendation** grain type (`0x0C`, §8.12) — a governed, auditable proposal to change memory or agent configuration, with a supersession-based content model and an audit-grain lifecycle — realized from the reserved range following the Skill (`0x0B`) precedent; byte values `0x01`–`0x0B` are unchanged, so existing content addresses remain valid. (The prior v1.4 revision renamed `belief`→`fact` (`0x01`) and `action`→`tool` (`0x05`), redesigned the Workflow grain as a directed graph, added the `embedding_text` common field, and added the Skill grain type (`0x0B`, §8.11).) Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
 **Last Updated:** 2026-06-12
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)

@@ -94,10 +94,12 @@ The following example shows a single assembled context covering every grain type
 
   <skill name="metrics_review" proficiency="0.82" domain="software">summarise quarterly engineering metrics and surface the reliability narrative</skill>
 
+  <recommendation target="entity:alice/velocity" severity="low">consolidate 2 duplicate "week 8 velocity" observations into one</recommendation>
+
 </context>
 ```
 
-Each element maps directly to one grain type. The LLM reads the tag to understand the epistemic status of the content — a `<fact>` carries a known confidence, a `<reasoning>` signals inference, a `<consent>` signals an explicit permission grant, a `<skill>` signals a packaged, reusable capability — without needing to parse attribute schemas or understand OMS internals.
+Each element maps directly to one grain type. The LLM reads the tag to understand the epistemic status of the content — a `<fact>` carries a known confidence, a `<reasoning>` signals inference, a `<consent>` signals an explicit permission grant, a `<skill>` signals a packaged, reusable capability, a `<recommendation>` signals a proposed, reviewable change — without needing to parse attribute schemas or understand OMS internals.
 
 ---
 

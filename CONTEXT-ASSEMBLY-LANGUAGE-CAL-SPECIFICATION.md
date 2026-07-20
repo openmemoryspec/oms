@@ -1,6 +1,6 @@
 # CAL (Context Assembly Language) Specification v1.0
 
-**Status:** Standards Track | **Date:** 2026-03-05 | **Version:** 1.1 | **Classification:** Experimental
+**Status:** Standards Track | **Date:** 2026-07-20 | **Version:** 1.2 | **Classification:** Experimental
 **Part of:** [Open Memory Specification (OMS) v1.4](./SPECIFICATION.md)
 ---
 
@@ -118,7 +118,7 @@ The line between Tier 0/1 (in CAL) and Tier 2 (not in CAL) is: **can the operati
 
 ### 1.5 Relationship to OMS
 
-CAL operates on the 11 grain types defined by OMS v1.4: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
+CAL operates on the 12 grain types defined by OMS v1.5: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill, Recommendation. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
 
 CAL extends the Store Protocol Convention defined in OMS §28.4 ([SPECIFICATION.md](./SPECIFICATION.md)) with a formal query language. Where OMS defines the `query`, `search`, and `supersede` store operations, CAL provides a structured, deterministic syntax for invoking them safely.
 
@@ -406,7 +406,7 @@ meta_field_name = "recall_priority" | "epistemic_status" | "verification_status"
 grain_field_name = event_field | state_field | workflow_field
                  | action_field | observation_field | goal_field
                  | reasoning_field | consensus_field | consent_field
-                 | skill_field ;
+                 | skill_field | recommendation_field ;
 
 event_field     = "role" | "session_id" | "parent_message_id" | "model_id" | "content" ;
 state_field     = "context" | "plan" ;
@@ -420,6 +420,8 @@ consent_field   = "consent_action" | "purpose" | "grantor_did" | "grantee_did"
                 | "scope" | "expires_at" ;
 skill_field     = "name" | "version" | "domain" | "holder_did" | "proficiency"
                 | "transferable" | "practice_count" | "last_practiced_at" ;
+recommendation_field = "target_ref" | "analyzer" | "severity" | "dedup_key"
+                | "rec_status" ;
 
 comparator      = "=" | "!=" | ">=" | "<=" | ">" | "<" ;
 
@@ -532,11 +534,11 @@ positive_integer = digit+ ;
 
 grain_type_plural   = "facts" | "events" | "states" | "workflows" | "tools"
                     | "observations" | "goals" | "reasonings" | "consensuses"
-                    | "consents" | "skills" ;
+                    | "consents" | "skills" | "recommendations" ;
 
 grain_type_singular = "fact" | "event" | "state" | "workflow" | "tool"
                     | "observation" | "goal" | "reasoning" | "consensus"
-                    | "consent" | "skill" ;
+                    | "consent" | "skill" | "recommendation" ;
 ```
 
 ---
@@ -558,6 +560,7 @@ grain_type_singular = "fact" | "event" | "state" | "workflow" | "tool"
 | Consensus | `consensuses` | `consensus` | 0x09 |
 | Consent | `consents` | `consent` | 0x0A |
 | Skill | `skills` | `skill` | 0x0B |
+| Recommendation | `recommendations` | `recommendation` | 0x0C |
 
 ### 5.2 Common Field Types
 
@@ -723,6 +726,18 @@ All Fact fields are in the common set (`subject`, `relation`, `object`, `confide
 | `practice_count` | Number | `=`, `>=`, `<=`, `>`, `<` | Successful applications |
 | `last_practiced_at` | Temporal | `=`, `BETWEEN` | Most recent successful application |
 
+#### Recommendation (0x0C) -- `RECALL recommendations`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `target_ref` | String | `=`, `!=`, `IN` | The change target (`entity:…`, `grain:sha256:…`, `doc:…`, etc.) |
+| `analyzer` | String | `=`, `IN` | The producing analyzer's id (e.g., `"waiser.duplicate_sweep/1"`) |
+| `severity` | String | `=`, `IN` | `"info"`, `"low"`, `"medium"`, `"high"` |
+| `dedup_key` | String | `=` | Stable proposal identity (a supersession chain shares one) |
+| `rec_status` | String | `=`, `IN` | Review state (index-layer): `"pending"`, `"approved"`, `"rejected"`, `"applied"`, `"rolled_back"`, `"expired"` |
+
+Recommendation grains are engine-emitted proposals and are **not CAL-addable** (like Events, Tools, and States — see §7.2); `RECALL recommendations` reads the proposal queue, and lifecycle transitions occur only through the host's review/apply path (§8.12.1 of the OMS spec), never via `ADD`/`SUPERSEDE SET`.
+
 ### 6.4 Type-Specific ADD Extensions
 
 When adding Goal, Observation, or Skill grains, type-specific fields are available in SET clauses:
@@ -772,6 +787,7 @@ ADD skill
 | Consensus | 18 | 3 | 21 |
 | Consent | 18 | 6 | 24 |
 | Skill | 18 | 8 | 26 |
+| Recommendation | 18 | 5 | 23 |
 | _(no type)_ | 18 | 0 | 18 |
 
 ---
@@ -1350,6 +1366,7 @@ Each grain type defines a **content rule** (what becomes the text content of the
 | **Consensus** | `object` (the agreed claim) | `threshold`?, `count`? |
 | **Consent** | `purpose` | `action`, `grantor`, `grantee` |
 | **Skill** | `description` (what the skill enables) | `name`, `proficiency`?, `domain`? |
+| **Recommendation** | `summary` (the rendered proposal one-liner) | `target`, `severity`?, `analyzer`? |
 
 Attributes marked with `?` are included at `standard` and `full` disclosure levels only, omitted at `summary` level.
 
@@ -1511,7 +1528,7 @@ FORMAT TEMPLATE {
 }
 ```
 
-**All 11 grain types rendered:**
+**All 12 grain types rendered:**
 ```sml
 <context intent="helping alice prepare her Q1 engineering review">
 
@@ -1544,6 +1561,8 @@ FORMAT TEMPLATE {
   <consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>
 
   <skill name="metrics_review" proficiency="0.82" domain="software">summarise quarterly engineering metrics and surface the reliability narrative</skill>
+
+  <recommendation target="entity:alice/velocity" severity="low">consolidate 2 duplicate "week 8 velocity" observations into one</recommendation>
 
 </context>
 ```
@@ -1644,6 +1663,7 @@ Where:
 | `consensuses` | `threshold`, `count`, `content` |
 | `consents` | `grantor`, `grantee`, `action`, `content` |
 | `skills` | `name`, `content`, `proficiency` |
+| `recommendations` | `target`, `content`, `severity` |
 
 At `summary` disclosure, `confidence`, `state`, `phase`, and `type` columns are omitted.
 At `full` disclosure, additional columns `source` and `observed` are appended.
@@ -2438,7 +2458,7 @@ Errors are stable across spec versions. Every error MUST include: code, message,
     "position": {"start": 7, "end": 13, "line": 1, "col": 8},
     "suggestion": "Did you mean \"fact\"? (OMS renamed Belief -> Fact in v1.4)",
     "example": "RECALL facts WHERE subject = \"alice\"",
-    "valid_values": ["fact","event","state","workflow","tool","observation","goal","reasoning","consensus","consent","skill"]
+    "valid_values": ["fact","event","state","workflow","tool","observation","goal","reasoning","consensus","consent","skill","recommendation"]
   }
 }
 ```
@@ -2637,7 +2657,7 @@ It can read, assemble, and evolve memories, but never delete them.
   REVERT sha256:hash REASON "why"
 
 ### Types: facts, events, states, workflows, tools, observations, goals,
-           reasonings, consensuses, consents, skills
+           reasonings, consensuses, consents, skills, recommendations
 
 ### WHERE conditions (combine with AND):
   query = "search text"           -- semantic search
@@ -2969,6 +2989,7 @@ CHUNK, PAUSE, RESUME, CANCEL
 
 | Version | Date | Change |
 |---------|------|--------|
+| 1.2 | 2026-07-20 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Backward-compatible. |
 | 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. As part of the OMS v1.4 release, also adds the Skill grain type (`0x0B`) to the closed query set (`RECALL skills` / `ADD skill`, type-specific field set, `<skill>` projection, TOON columns, `mg:capable_of` in the `AGENCY` shortcut) and corrects `belief`/`action` literals the rename left behind (`grain_type_plural`, `RECALL MY`, TOON tables, `DESCRIBE` listing, `CAL-E051`). |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
 

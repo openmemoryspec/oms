@@ -9,6 +9,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
+## [1.5] — 2026-07-20
+
+### Added
+
+- **Recommendation grain type (`0x0C`, §8.12)** — new dedicated cognitive grain type for a governed, auditable **proposal to change memory or agent configuration**. Realized from the `0x0C–0xEF` reserved range following the Skill (`0x0B`) precedent. A Recommendation names a `target_ref` (`grain:` / `entity:` / `query:` / `template:` / `doc:` / `host:` scheme), the producing `analyzer` (`{id, params}`), a deterministic `summary` (`{template_id, args}` — never analyzer free prose), a computed `dedup_key`, and exactly one proposal (`proposal_cal` / `proposal_edit` / `proposal_data`). Optional: `severity`, `metric_snapshot`, `evidence_query`; evidence and scoring reuse the common `derived_from` (evidence hashes), `confidence`, `importance`, and `valid_to` (expiry). It never mutates memory by itself — it enters a propose → review → apply → roll-back lifecycle (§8.12.1) whose transitions are immutable audit Observation grains, and its review state (`rec_status`) is a rebuildable index-layer cache, so the recommendation's content address is stable for its whole life and a change in content is a supersession sharing one `dedup_key`. Byte values `0x01`–`0x0B` are unchanged; existing content addresses remain valid.
+- **§6.13 Recommendation-Specific Fields** — compaction table for the type's fields (`tref`, `anlz`, `summ`, `ddk`, `pcal`, `pedit`, `pdata`, `sev`, `msnap`, `evq`). (Former §6.13 Compaction Rules renumbered to §6.14.)
+- **Recommendation compaction (Appendix C)** — added a Recommendation-Specific Fields compaction block.
+- **Grain-type table (§3.1), glossary, ABNF/CDDL `type-byte`, the §8 type count, and conformance Level 1** updated to include Recommendation (`0x0C`); reserved range narrowed to `0x0D–0xEF`.
+
+### CAL 1.2 — Added
+
+- **Recommendation grain support** — `recommendation`/`recommendations` added to the closed grain-type set (§5.1); `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`); `<recommendation>` content-projection rule; TOON column set; field-count row; grammar productions `grain_type_plural`, `grain_type_singular`, `grain_field_name`, and new `recommendation_field`; the `DESCRIBE` type listing and the JSON `valid_values` enum. Recommendation is **query-only** — engine-emitted and lifecycle-gated — so it is deliberately absent from the CAL-addable set (no `ADD recommendation`; lifecycle transitions never occur via `ADD`/`SUPERSEDE SET`). Backward-compatible.
+
+### SML — Added
+
+- **`<recommendation>` element** — SML tag for the Recommendation grain, rendering the proposal summary with `target`/`severity` attributes; added to the flat tag set and the all-types rendering example.
+
+---
+
 ## [1.4] — 2026-06-13
 
 ### Added
