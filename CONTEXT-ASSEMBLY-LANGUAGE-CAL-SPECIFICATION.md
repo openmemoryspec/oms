@@ -1,7 +1,7 @@
-# CAL (Context Assembly Language) Specification v1.0
+# CAL (Context Assembly Language) Specification v1.2
 
-**Status:** Standards Track | **Date:** 2026-07-20 | **Version:** 1.2 | **Classification:** Experimental
-**Part of:** [Open Memory Specification (OMS) v1.4](./SPECIFICATION.md)
+**Status:** Standards Track | **Date:** 2026-08-03 | **Version:** 1.2 | **Classification:** Experimental
+**Part of:** [Open Memory Specification (OMS) v1.5](./SPECIFICATION.md)
 ---
 
 ## Table of Contents
@@ -241,7 +241,10 @@ observer_id, observer_type,
 goal_state, assigned_agent, deadline, depends_on,
 reasoning_type, premises, conclusion,
 threshold, agreement_count, participating_observers,
-consent_action, purpose, grantor_did, grantee_did, scope, expires_at
+consent_action, purpose, grantor_did, grantee_did, scope, expires_at,
+name, version, domain, holder_did, proficiency, transferable,
+practice_count, last_practiced_at,
+target_ref, analyzer, severity, dedup_key, rec_status
 ```
 
 ### 3.4 Literals
@@ -734,12 +737,14 @@ All Fact fields are in the common set (`subject`, `relation`, `object`, `confide
 | Field | Type | Operators | Notes |
 |-------|------|-----------|-------|
 | `target_ref` | String | `=`, `!=`, `IN` | The change target (`entity:…`, `grain:sha256:…`, `doc:…`, etc.) |
-| `analyzer` | String | `=`, `IN` | The producing analyzer's id (e.g., `"waiser.duplicate_sweep/1"`) |
+| `analyzer` | String | `=`, `IN` | The producing analyzer's id (e.g., `"waiser.duplicate_sweep/1"`). **Projection:** OMS stores `analyzer` as a map (`{id, params?}`, §8.12 of the OMS spec); CAL matches against its `id` member only. `params` is not queryable. |
 | `severity` | String | `=`, `IN` | `"info"`, `"low"`, `"medium"`, `"high"` |
 | `dedup_key` | String | `=` | Stable proposal identity (a supersession chain shares one) |
 | `rec_status` | String | `=`, `IN` | Review state (index-layer): `"pending"`, `"approved"`, `"rejected"`, `"applied"`, `"rolled_back"`, `"expired"` |
 
-Recommendation grains are engine-emitted proposals and are **not CAL-addable** (like Events, Tools, and States — see §7.2); `RECALL recommendations` reads the proposal queue, and lifecycle transitions occur only through the host's review/apply path (§8.12.1 of the OMS spec), never via `ADD`/`SUPERSEDE SET`.
+Recommendation grains are engine-emitted proposals and are **not CAL-addable** — like Events, Tools, and States, they are absent from the addable whitelist enforced by `CAL-E051` (Appendix C). `RECALL recommendations` reads the proposal queue, and lifecycle transitions occur only through the host's review/apply path (§8.12.1 of the OMS spec), never via `ADD`/`SUPERSEDE SET`.
+
+> **Note — why `rec_status` is type-scoped:** `verification_status` is a `meta_field_name` (§4), queryable on every grain type. `rec_status` is instead a `recommendation_field`, because it is meaningful only for this one type — a Recommendation's review state has no analogue on a Fact or an Event. Both are index-layer fields in OMS (§6.1 of the OMS spec); the asymmetry in CAL is deliberate scoping, not an oversight.
 
 ### 6.4 Type-Specific ADD Extensions
 
@@ -2142,8 +2147,12 @@ Each grain type projects its fields into a **text content** string and **attribu
 | Workflow | `nodes` joined | `<workflow trigger="review_prep_requested">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>` |
 | Consensus | `object` | `<consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>` |
 | Consent | `purpose` | `<consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>` |
+| Skill | `description` | `<skill name="incident_retro" proficiency="0.82" domain="engineering">run a blameless incident retrospective and distil the recurring themes</skill>` |
+| Recommendation | `summary` (rendered) | `<recommendation target="entity:eng/alice" severity="low" analyzer="waiser.duplicate_sweep/1">merge 3 near-duplicate facts about alice's dashboard preferences</recommendation>` |
 
 The `PROJECT` clause (Section 10.3.5) overrides these defaults when custom or domain-specific fields must be surfaced.
+
+> **Note:** Section 10.3.2 is the normative source for content rules and attribute sets; this table illustrates the resulting output. When a grain type is added, Section 10.3.2 and this table MUST be updated together.
 
 ---
 
@@ -2713,8 +2722,12 @@ It can read, assemble, and evolve memories, but never delete them.
   SUPERSEDE sha256:hash SET field = value [SET ...] REASON "why"
   REVERT sha256:hash REASON "why"
 
-### Types: facts, events, states, workflows, tools, observations, goals,
-           reasonings, consensuses, consents, skills, recommendations
+### Types (queryable via RECALL -- all 12):
+  facts, events, states, workflows, tools, observations, goals,
+  reasonings, consensuses, consents, skills, recommendations
+
+### Types creatable via ADD (subset -- others rejected with CAL-E051):
+  facts, observations, goals, workflows, skills
 
 ### WHERE conditions (combine with AND):
   query = "search text"           -- semantic search
@@ -3029,6 +3042,21 @@ CHUNK, PAUSE, RESUME, CANCEL
 | Consent | `grantee_did` | String | `=` |
 | Consent | `scope` | String | `=` |
 | Consent | `expires_at` | Temporal | `=`, `BETWEEN` |
+| Skill | `name` | String | `=`, `!=`, `IN` |
+| Skill | `version` | String | `=`, `IN` |
+| Skill | `domain` | String | `=`, `IN` |
+| Skill | `holder_did` | String | `=` |
+| Skill | `proficiency` | Number | `=`, `>=`, `<=`, `>`, `<` |
+| Skill | `transferable` | Boolean | `=` |
+| Skill | `practice_count` | Number | `=`, `>=`, `<=`, `>`, `<` |
+| Skill | `last_practiced_at` | Temporal | `=`, `BETWEEN` |
+| Recommendation | `target_ref` | String | `=`, `!=`, `IN` |
+| Recommendation | `analyzer` | String | `=`, `IN` |
+| Recommendation | `severity` | String | `=`, `IN` |
+| Recommendation | `dedup_key` | String | `=` |
+| Recommendation | `rec_status` | String | `=`, `IN` |
+
+> **Note:** Section 6.3 is the normative source for these field sets; this appendix is a consolidated index of it. When a grain type is added, both MUST be updated together.
 
 ### Domain-Prefixed Fields
 
@@ -3048,14 +3076,14 @@ CHUNK, PAUSE, RESUME, CANCEL
 
 | Version | Date | Change |
 |---------|------|--------|
-| 1.2 | 2026-07-20 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Also adds the **`ELEMENT` shorthand** for custom templates (Section 10.6.1): `DEFINE TEMPLATE <name> AS "<text>"` and `FORMAT TEMPLATE "<text>"`, both defined by equivalence to an `ELEMENT` section, plus the `template_shorthand` production and `"TEMPLATE" , string_literal` in `format_spec`. This also corrects two 1.1 defects in the same examples (Sections 10.1.1, 14.2.1, 27): the `TEMPLATE "..."` form they use was not admitted by the Section 7 grammar, and they interpolated bare `{{subject}}`/`{{object}}` rather than the `grain.` namespace that Section 10.5 defines and Section 10.8 closes. Backward-compatible. |
+| 1.2 | 2026-08-03 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Also adds the **`ELEMENT` shorthand** for custom templates (Section 10.6.1): `DEFINE TEMPLATE <name> AS "<text>"` and `FORMAT TEMPLATE "<text>"`, both defined by equivalence to an `ELEMENT` section, plus the `template_shorthand` production and `"TEMPLATE" , string_literal` in `format_spec`. This also corrects two 1.1 defects in the same examples (Sections 10.1.1, 14.2.1, 27): the `TEMPLATE "..."` form they use was not admitted by the Section 7 grammar, and they interpolated bare `{{subject}}`/`{{object}}` rather than the `grain.` namespace that Section 10.5 defines and Section 10.8 closes. Backward-compatible. |
 | 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. As part of the OMS v1.4 release, also adds the Skill grain type (`0x0B`) to the closed query set (`RECALL skills` / `ADD skill`, type-specific field set, `<skill>` projection, TOON columns, `mg:capable_of` in the `AGENCY` shortcut) and corrects `belief`/`action` literals the rename left behind (`grain_type_plural`, `RECALL MY`, TOON tables, `DESCRIBE` listing, `CAL-E051`). |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
 
 ---
 
-**Document Status:** This is the CAL (Context Assembly Language) Specification v1.1. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.4 — see [SPECIFICATION.md](./SPECIFICATION.md).
+**Document Status:** This is the CAL (Context Assembly Language) Specification v1.2. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.5 — see [SPECIFICATION.md](./SPECIFICATION.md).
 
-**Last Updated:** 2026-03-05
+**Last Updated:** 2026-08-03
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
 **Copyright:** Public Domain (CC0 1.0 Universal)

@@ -4,7 +4,7 @@
 **Version:** 1.5
 **Status:** Standards Track
 **Category:** Data Formats
-**Date:** June 2026
+**Date:** August 2026
 **Copyright:** Public Domain (CC0 1.0 Universal)
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
 
@@ -144,7 +144,7 @@ OMS defines the wire format and grain semantics. Two companion specifications ar
 
 CAL is a non-destructive, deterministic, LLM-native language for assembling agent context from OMS memory stores. It answers the question: *"what should be in the agent's context window right now?"* Key properties:
 
-- Operates on all 11 OMS grain types (Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill)
+- Operates on all 12 OMS grain types (Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill, Recommendation)
 - Extends the OMS Store Protocol (§28.4) with a formal, structured query syntax
 - `ASSEMBLE` statements compose context from multiple grain sources within a token budget
 - Append-only: CAL writes create new grains via `put`; the language cannot delete or modify existing grains — this is enforced at the grammar level
@@ -391,7 +391,7 @@ A grain has two distinct layers with different mutability guarantees:
 | **Blob** | 9-byte fixed header + MessagePack/CBOR payload | **Immutable** — once written, never modified | Yes | Yes |
 | **Index** | Status and access-tracking fields (§28.3) | **Mutable** — updated by the store/index layer | No | No |
 
-**A grain's content is the immutable blob identified by its content address. A grain's status is maintained in the index layer.** Index-layer fields — `superseded_by`, `system_valid_to`, `verification_status`, `access_count`, `last_accessed_at` — are NOT part of the hashed blob bytes and are NOT covered by COSE signatures. They are managed exclusively by the store after initial write (see §28.3 for update rules).
+**A grain's content is the immutable blob identified by its content address. A grain's status is maintained in the index layer.** Index-layer fields — `superseded_by`, `system_valid_to`, `verification_status`, `rec_status`, `access_count`, `last_accessed_at` — are NOT part of the hashed blob bytes and are NOT covered by COSE signatures. They are managed exclusively by the store after initial write (see §28.3 for update rules).
 
 This separation is fundamental to the OMS architecture:
 
@@ -461,6 +461,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 | `entity_id` | `eid` | string | External entity reference — product ID, patient MRN, vehicle chassis ID, instrument serial. Not a DID; opaque to the spec. |
 | `epistemic_status` | `epstat` | string | Categorical certainty: `"certain"`, `"probable"`, `"uncertain"`, `"estimated"`, `"derived"`. Complements the continuous `confidence` float. Open enum. |
 | `verification_status` | `vstatus` | string | Values: `"unverified"` (default), `"verified"`, `"contested"`, `"retracted"`. |
+| `rec_status` | `rstat` | string | **Recommendation grains only (§8.12).** Review state: `"pending"` (default), `"approved"`, `"rejected"`, `"applied"`, `"rolled_back"`, `"expired"`. Rebuilt from the audit chain (§8.12.1), never author-written. |
 | `requires_human_review` | `rhr` | bool | If `true`, this grain's content MUST NOT drive automated decisions until a human has reviewed and cleared it. Binding for Reasoning grains; advisory for others. |
 | `processing_basis` | `pbasis` | string | Content address of the Consent grain that authorized this grain's creation. Used to compute erasure scope on consent revocation. |
 | `identity_state` | `idst` | string | Identity resolution state: `"anonymous"`, `"pseudonymous"`, `"authenticated"`. Affects personalization logic and compliance scope. |
@@ -475,7 +476,7 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 
 > **Note — `source_type` for Observation grains:** Use `"sensor"` when `observer_type` is a physical instrument; `"agent_inferred"` when `observer_type` is a cognitive AI observer (`"llm"`, `"reflector"`, `"classifier"`, `"detector"`); `"user_explicit"` for human observers.
 
-> **Index-layer fields (§5.6, §28.3):** The following fields in the table above are **not stored in the immutable .mg blob**. They are maintained by the store/index layer and are excluded from the content address and COSE signature: `superseded_by`, `system_valid_to`, `verification_status`, `access_count`, `last_accessed_at`. Writers MUST NOT set these fields; see §28.3 for store update rules.
+> **Index-layer fields (§5.6, §28.3):** The following fields in the table above are **not stored in the immutable .mg blob**. They are maintained by the store/index layer and are excluded from the content address and COSE signature: `superseded_by`, `system_valid_to`, `verification_status`, `rec_status`, `access_count`, `last_accessed_at`. Writers MUST NOT set these fields; see §28.3 for store update rules. `rec_status` is listed here — rather than only in §8.12 — so that this prohibition binds it; it is the one entry scoped to a single grain type, and it is meaningless on any grain that is not a Recommendation.
 
 ### 6.2 Event-Specific Fields
 
@@ -663,7 +664,7 @@ When a Goal or Fact grain uses the `mg:delegates_to` relation, the following fie
 
 ### 6.13 Recommendation-Specific Fields
 
-> **Note:** A Recommendation reuses common fields for evidence and scoring — `derived_from` (`df`, evidence hashes), `confidence` (`c`), `importance` (`im`), and `valid_to` (`vt`, expiry). The review state (`rec_status`) is an index-layer cache reconstructed from the audit chain (§8.12.1) and is **not** a compacted blob field.
+> **Note:** A Recommendation reuses common fields for evidence and scoring — `derived_from` (`df`, evidence hashes), `confidence` (`c`), `importance` (`im`), and `valid_to` (`vt`, expiry). The review state (`rec_status`) is deliberately absent from the table below: it is an index-layer field, not a blob field, so it is compacted in §6.1 (short key `rstat`) alongside `verification_status` and is reconstructed from the audit chain (§8.12.1) rather than written by an author.
 
 | Full Name | Short Key | Type |
 |-----------|-----------|------|
@@ -1110,7 +1111,7 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 - `summary` (map) — a deterministic, template-rendered description: `{template_id: string, args: map}`. An analyzer MUST NOT store free prose here; the human-readable string is produced by rendering `template_id` with `args`, so summaries stay reproducible and translatable.
 - `dedup_key` (string) — the recommendation's stable proposal identity, computed (never author-chosen) per normative rule 5. Two recommendations with the same `dedup_key` are the same proposal; a supersession chain (evidence refresh, a growing cluster) shares one `dedup_key` across all of its content addresses.
 - exactly one **proposal** field:
-  - `proposal_cal` (string) — a CAL batch of Tier-1 "evolve" writes (`ADD`/`SUPERSEDE`; MAY additionally contain `FORGET`, §6.4). The standard non-destructive change form.
+  - `proposal_cal` (string) — a CAL batch of Tier-1 *evolve* writes (`ADD` / `SUPERSEDE` / `REVERT`; CAL §2.2). The standard change form. CAL has no destructive verb — `FORGET`, `DELETE` and their kin are excluded at the grammar level and are parse errors, not keywords (CAL §2.4) — so a `proposal_cal` is always non-destructive and always invertible. A destructive change, where a host supports one at all, MUST be proposed as `proposal_data` and executed outside CAL.
   - `proposal_edit` (map) — `{format: string, base_digest: string, diff: string}` for `doc:` targets; `base_digest` lets an applier detect a stale base before editing.
   - `proposal_data` (map) — an opaque host-config change for `host:` targets.
 - `created_at` (int64, epoch ms)
@@ -1125,23 +1126,33 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
   - `importance` — triage weighting.
   - `valid_to` — when the recommendation expires; expiry is computed from `valid_to`, never by a background daemon.
 
-**Lifecycle status (index-layer):** A recommendation's review state (`rec_status` ∈ `pending | approved | rejected | applied | rolled_back | expired`) is **not stored in the .mg blob**. Like `superseded_by` and `verification_status` (§6.1, §5.6) it is a rebuildable index-layer cache derived from the authoritative audit chain (§8.12.1). The recommendation's content address is therefore **stable for its whole life** — a host holds one identifier from propose to rollback — and a plain `write` / `SUPERSEDE … SET` MUST NOT be able to forge a status.
+**Lifecycle status (index-layer):** A recommendation's review state (`rec_status` ∈ `pending | approved | rejected | applied | rolled_back | expired`) is **not stored in the .mg blob**. Like `superseded_by` and `verification_status` it is a rebuildable index-layer cache derived from the authoritative audit chain (§8.12.1), and it is enumerated as an index-layer field in §5.6, §6.1 and §28.3 — so the general prohibition on writers setting index-layer fields (§6.1) binds it, and a plain `write` / `SUPERSEDE … SET` cannot forge a status. A recommendation's content address is therefore **stable across its lifecycle transitions**: propose, approve, apply and roll back never re-address the grain, so a host can hold one identifier through review. Content changes are the exception and are handled by supersession — the identifier that is durable across a supersession chain is `dedup_key`, not the content address (§8.12.1).
 
 #### 8.12.1 Lifecycle and audit
 
-- **Authoritative record.** Each lifecycle transition is one immutable **audit Observation grain** (§8.6) hash-chained per recommendation: its `derived_from` includes the recommendation's content address and the previous audit grain's address (plus any result addresses). Each audit grain carries a host-asserted `actor` label (e.g. `"user:alice"`, `"agent:worker-3"`, `"policy:auto"`), an `observer_type` ∈ `{human, agent, policy, system}`, and a mandatory human-readable reason (RECOMMENDED ≤ 500 chars). The chain is portable, tamper-evident, and fork-mergeable.
-- **State machine.** `pending → approved | rejected`; `approved → applied`; `applied → rolled_back`. `pending → applied` directly is permitted **only** when `actor` denotes a policy principal (auto-apply). `expired` is computed from `valid_to`.
-- **Content vs. lifecycle.** A change in the recommendation's *content* (refreshed evidence, a larger cluster) is a **supersession** of the grain — a new content address with the **same `dedup_key`** — not a status change. Lifecycle ≠ content.
-- **Reproducible undo.** The inverse of an applied proposal is derived at apply time and recorded on the applied audit grain as a store-operation plan (no new CAL syntax): a `SUPERSEDE` reinstates the prior content; an `ADD` is undone by tombstoning the added grain so it truly leaves the recall path; a document edit supersedes back to the prior head. A `FORGET` has no inverse — a recommendation whose proposal contains `FORGET` is not rollbackable.
+- **Authoritative record.** Each lifecycle transition is one immutable **audit Observation grain** (§8.6) hash-chained per recommendation: its `derived_from` includes the recommendation's content address and the previous audit grain's address (plus any result addresses). The acting principal is recorded in the audit grain's existing `observer_id` (§8.6) — e.g. `"user:alice"`, `"agent:worker-3"`, `"policy:auto"` — and its class in `observer_type`, which MUST be either `"human"` (registered, §24.2) or one of the namespaced values `"rec:agent"`, `"rec:policy"`, `"rec:system"` (§24.3). No field beyond the Observation schema is introduced. The transition's mandatory human-readable reason is carried in the audit grain's content (RECOMMENDED ≤ 500 chars). The chain is portable, tamper-evident, and fork-mergeable.
+- **State machine.** `pending → approved | rejected`; `approved → applied`; `applied → rolled_back`; and `rejected → pending`, which lets a recommendation re-enter review on refreshed evidence under its existing `dedup_key` rather than becoming a second proposal. `pending → applied` directly is permitted **only** when the transition's `observer_type` is `"rec:policy"` (auto-apply); `observer_type` — never `observer_id` — is the discriminator for this gate, since `observer_id` is a host-asserted label with no normative structure. `applied` and `rolled_back` are terminal. `expired` is computed from `valid_to` and is reachable only from `pending` or `approved`; an expired recommendation MUST NOT be applied, and expiry of an `approved` recommendation withdraws that approval.
+- **Content vs. lifecycle.** A change in the recommendation's *content* (refreshed evidence, a larger cluster) is a **supersession** of the grain — a new content address with the **same `dedup_key`** — not a status change. Lifecycle ≠ content. A supersession MUST reset the superseding grain's `rec_status` to `pending`: approval is granted to specific content and never carries forward to content no reviewer has seen.
+- **Reproducible undo.** The inverse of an applied proposal is derived at apply time and recorded on the applied audit grain as a store-operation plan (no new CAL syntax): a `SUPERSEDE` reinstates the prior content; an `ADD` is undone by tombstoning the added grain so it truly leaves the recall path; a `REVERT` is undone by superseding back to the reverted head; a document edit supersedes back to the prior head. Because CAL is structurally non-destructive (§2.4 of the CAL spec), every `proposal_cal` is rollbackable. A `proposal_data` change is opaque to OMS and MAY be irreversible: a host that cannot derive an inverse for one MUST record it as not rollbackable on the applied audit grain rather than offer a rollback it cannot perform.
 
 **Normative rules:**
 1. Exactly one of `proposal_cal`, `proposal_edit`, `proposal_data` MUST be present.
 2. Recommendation grains MUST NOT be mutated in place; every content change is a supersession, every lifecycle transition an audit Observation grain (§8.6). The `rec_status` index-layer cache MUST be reconstructible from the audit chain alone.
-3. Lifecycle-derived state MUST NOT be writer-settable: `rec_status` is not a blob field, and a `SUPERSEDE … SET` targeting a status field MUST be rejected. Transitions occur only through the review/apply path that emits audit grains.
+3. Lifecycle-derived state MUST NOT be writer-settable: `rec_status` is an index-layer field (§5.6, §6.1, §28.3), so the general rule that writers MUST NOT set index-layer fields applies to it, and a `SUPERSEDE … SET` targeting it MUST be rejected. Transitions occur only through the review/apply path that emits audit grains.
 4. `summary.template_id` MUST reference a deterministic template and `summary.args` MUST carry the values it interpolates; implementations MUST NOT store analyzer-authored free prose in `summary`.
-5. `dedup_key` MUST be computed as the NFC- and case-fold-normalized identity `(analyzer-family, target_ref, action-kind)`, where **`analyzer-family` is `analyzer.id` with the `/major` suffix removed** (so bumping `.../1` → `.../2` does not re-propose the queue as novel — the exact version stays in `analyzer.id`) and **action-kind** is the proposal variant (`cal` | `edit` | `data`). `dedup_key` MUST NOT incorporate the proposal body or the evidence, so that a content refresh supersedes rather than re-proposes.
+5. `dedup_key` MUST be computed (never author-chosen) as the lowercase hex SHA-256 of three NUL-separated, UTF-8 encoded components — **analyzer-family**, **`target_ref`**, **action-kind** — in exactly this order:
+
+   ```
+   dedup_key = hex(sha256(nfc(casefold(analyzer_family)) || 0x00 ||
+                          nfc(target_ref)                || 0x00 ||
+                          action_kind))
+   ```
+
+   Normalization is NFC applied *after* case-folding. `target_ref` is NFC-normalized but deliberately **not** case-folded, because a `grain:sha256:` digest and a host-defined opaque segment may both be case-sensitive. **`analyzer-family`** is `analyzer.id` with the `/major` suffix removed, so bumping `.../1` → `.../2` does not re-propose the queue as novel while the exact version stays in `analyzer.id`. **action-kind** is the proposal variant — the literal `cal`, `edit` or `data`. `dedup_key` MUST NOT incorporate the proposal body or the evidence, so that a content refresh supersedes rather than re-proposes. Because `dedup_key` is the shared identity across hosts, this construction is normative: two implementations MUST derive the same key for the same proposal or dedup fails on any imported, federated or forked store.
 6. Each `derived_from` entry SHOULD be the content address of a grain the recommendation is grounded in; when present, `evidence_query` MUST regenerate the full evidence set.
 7. Recommendation grains SHOULD use a dedicated namespace (e.g. `"agent:recommendations"`) to keep the proposal queue efficiently discoverable and separable from user memory.
+8. **Execution authority.** A stored `proposal_cal` is CAL authored by one principal and executed later by another, so it does not carry a capability of its own — CAL binds every query to a `CapabilityToken` at execution time (CAL §2.3). An applier MUST execute the batch under the **approving principal's** capability, never the analyzer's and never an ambient store authority; for an auto-applied recommendation this is the policy principal named in the transition's `observer_id`. An applier MUST reject a proposal whose writes resolve outside the recommendation's own namespace: a recommendation MUST NOT propose writes into a namespace it does not itself inhabit.
+9. **Bounds and target validation.** `proposal_cal` MUST NOT exceed CAL's `MAX_QUERY_LENGTH` (8192 bytes), and applying it is subject to the same Tier-1 write quotas as any other CAL batch (CAL §2.3). Before applying a `proposal_edit`, a host MUST resolve the `doc:` target against an allowlist and MUST verify `base_digest` against the current document head, rejecting the proposal if the base has drifted. `proposal_data` is opaque to OMS: a host MUST validate it against its own schema before applying, and SHOULD require it to be signed (§9) when the recommendation crosses a trust boundary.
 
 ---
 
@@ -1455,9 +1466,10 @@ Field names use the compacted short keys from §6.1. Null/absent values are omit
 | Class | Fields | Export | Import |
 |-------|--------|--------|--------|
 | **Portable** | `superseded_by`, `system_valid_to`, `verification_status` | MUST include | MUST merge into index |
+| **Rebuildable** | `rec_status` | MAY include | MUST rebuild from the audit chain |
 | **Local** | `access_count`, `last_accessed_at` | MAY include | MAY merge or reset to zero |
 
-Portable fields carry semantic state (supersession chains, verification decisions) that is meaningful across systems. Local fields carry store-specific access statistics that may not be meaningful in a different deployment.
+Portable fields carry semantic state (supersession chains, verification decisions) that is meaningful across systems. Local fields carry store-specific access statistics that may not be meaningful in a different deployment. `rec_status` is neither: unlike `verification_status` it is fully derivable from data that travels in the same file — the audit Observation grains of §8.12.1 — so an importer MUST reconstruct it from that chain and MUST NOT trust an imported value, which is what keeps a forged manifest from conferring an approval.
 
 **Export rules:**
 - Exporters MUST set flag bit 4 and include a manifest when any grain in the file has non-default portable index-layer fields.
@@ -2955,6 +2967,7 @@ The following fields are updated by the **store/index layer** after initial writ
 | `superseded_by` | A superseding grain is accepted |
 | `system_valid_to` | Grain is superseded or contradicted |
 | `verification_status` | Verification, contestation, or retraction occurs |
+| `rec_status` | A Recommendation lifecycle transition is recorded (§8.12.1) — the store rebuilds this from the audit chain rather than accepting it from a writer |
 | `access_count` | Grain is retrieved by a search or get operation (see §22.10 for semantics) |
 | `last_accessed_at` | Grain is retrieved by a search or get operation (see §22.10 for semantics) |
 
@@ -3483,6 +3496,7 @@ footer        = 32OCTET  ; SHA-256 checksum
   "eid": "entity_id",
   "epstat": "epistemic_status",
   "vstatus": "verification_status",
+  "rstat": "rec_status",
   "rhr": "requires_human_review",
   "pbasis": "processing_basis",
   "idst": "identity_state",
@@ -3634,7 +3648,7 @@ footer        = 32OCTET  ; SHA-256 checksum
 }
 ```
 
-> **Note:** Evidence and scoring reuse common fields — `derived_from` (`df`), `confidence` (`c`), `importance` (`im`), `valid_to` (`vt`). The review state (`rec_status`) is an index-layer cache rebuilt from the audit chain (§8.12.1), not a compacted blob field.
+> **Note:** Evidence and scoring reuse common fields — `derived_from` (`df`), `confidence` (`c`), `importance` (`im`), `valid_to` (`vt`). The review state (`rec_status`) is an index-layer field compacted with the core fields above as `rstat`, not a Recommendation-specific blob field; it is rebuilt from the audit chain (§8.12.1).
 
 **Content Reference Nested Compaction:**
 
@@ -3833,5 +3847,5 @@ content_address = sha256(blob).hex()
 
 **Document Status:** This is the v1.5 revision of the .mg format specification. It adds the dedicated **Recommendation** grain type (`0x0C`, §8.12) — a governed, auditable proposal to change memory or agent configuration, with a supersession-based content model and an audit-grain lifecycle — realized from the reserved range following the Skill (`0x0B`) precedent; byte values `0x01`–`0x0B` are unchanged, so existing content addresses remain valid. (The prior v1.4 revision renamed `belief`→`fact` (`0x01`) and `action`→`tool` (`0x05`), redesigned the Workflow grain as a directed graph, added the `embedding_text` common field, and added the Skill grain type (`0x0B`, §8.11).) Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
-**Last Updated:** 2026-06-12
+**Last Updated:** 2026-08-03
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)

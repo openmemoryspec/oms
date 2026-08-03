@@ -1,7 +1,7 @@
 # SML (Semantic Markup Language) Specification v1.0
 
 **Status:** Standards Track | **Date:** 2026-03-03 | **Version:** 1.0 | **Classification:** Experimental
-**Part of:** [Open Memory Specification (OMS) v1.4](./SPECIFICATION.md)
+**Part of:** [Open Memory Specification (OMS) v1.5](./SPECIFICATION.md)
 
 ---
 
@@ -10,7 +10,7 @@
 - [Abstract](#abstract)
 1. [What is SML?](#1-what-is-sml)
 2. [Structural Rules](#2-structural-rules)
-3. [Comprehensive Example — All 11 Grain Types](#3-comprehensive-example--all-11-grain-types)
+3. [Comprehensive Example — All 12 Grain Types](#3-comprehensive-example--all-12-grain-types)
 4. [Progressive Disclosure](#4-progressive-disclosure)
 - [Appendix A: Relationship to CAL](#appendix-a-relationship-to-cal)
 
@@ -22,7 +22,7 @@
 
 SML uses tag syntax as a **semantic signalling device** — the tag name tells the LLM what kind of information follows (using OMS grain types as tag names), the attributes carry lightweight decision metadata, and the element text is natural language content.
 
-SML is part of the [Open Memory Specification (OMS) v1.4](./SPECIFICATION.md) family. The `FORMAT` system that produces SML output is defined in the [Context Assembly Language (CAL) specification](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md).
+SML is part of the [Open Memory Specification (OMS) v1.5](./SPECIFICATION.md) family. The `FORMAT` system that produces SML output is defined in the [Context Assembly Language (CAL) specification](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md).
 
 ---
 
@@ -57,7 +57,7 @@ The formatted output uses a **flat, semantic structure**:
 
 ---
 
-## 3. Comprehensive Example — All 11 Grain Types
+## 3. Comprehensive Example — All 12 Grain Types
 
 The following example shows a single assembled context covering every grain type. The scenario: an agent helping alice prepare her Q1 engineering review.
 
