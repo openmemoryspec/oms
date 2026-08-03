@@ -327,7 +327,8 @@ coalesce_stmt   = "COALESCE" , "(" , recall_stmt , "," , recall_stmt ,
                   { "," , recall_stmt } , ")" ;
 
 define_template_stmt = "DEFINE" , "TEMPLATE" , template_name ,
-                       [ extends_clause ] , template_body ;
+                       [ extends_clause ] ,
+                       ( template_body | template_shorthand ) ;
 
 (* --- Clauses --- *)
 
@@ -348,6 +349,7 @@ aliased_format  = format_spec , [ "AS" , identifier ] ;
 format_spec     = format_type
                 | preset_name
                 | "TEMPLATE" , template_name
+                | "TEMPLATE" , string_literal
                 | "TEMPLATE" , "{" , template_body , "}" ;
 format_type     = "markdown" | "json" | "yaml" | "text" | "sml" | "triples" | "toon" ;
 preset_name     = "structured" | "readable" | "compact" | "data" ;
@@ -509,6 +511,7 @@ repeat_mod              = "*" , positive_integer ;
 template_name   = identifier ;
 extends_clause  = "EXTENDS" , ( preset_name | template_name ) ;
 template_body   = section+ ;
+template_shorthand = "AS" , string_literal ;
 section         = header_section | element_section | element_summary_section
                 | element_omit_section | source_break_section | footer_section ;
 header_section           = "HEADER" , "{" , template_text , "}" ;
@@ -1313,8 +1316,8 @@ Each format in a bracketed list MAY include an `AS <identifier>` alias. When pre
 
 ```
 CAL/1 RECALL facts FORMAT [json AS customers, markdown AS report]
-CAL/1 RECALL facts FORMAT [json AS structured, TEMPLATE "{{subject}}: {{object}}" AS oneliner]
-CAL/1 RECALL facts FORMAT [TEMPLATE "{{subject}}" AS names, TEMPLATE "{{object}}" AS values]
+CAL/1 RECALL facts FORMAT [json AS structured, TEMPLATE "{{grain.subject}}: {{grain.object}}" AS oneliner]
+CAL/1 RECALL facts FORMAT [TEMPLATE "{{grain.subject}}" AS names, TEMPLATE "{{grain.object}}" AS values]
 ```
 
 **Rules:**
@@ -1327,6 +1330,7 @@ CAL/1 RECALL facts FORMAT [TEMPLATE "{{subject}}" AS names, TEMPLATE "{{object}}
 6. Maximum 5 formats per list. Exceeding this limit produces a `CAL-E110` error.
 7. When aliases are used, the effective key (alias or canonical name) MUST be unique across the list. Duplicate keys where at least one is an explicit alias produce a `CAL-E113` error.
 8. Aliases follow identifier syntax (`[a-z][a-z0-9_]*`). Aliases are only supported in bracketed format lists, not in bare comma-separated lists.
+9. A `TEMPLATE "<text>"` entry is an inline template in the `ELEMENT` shorthand form (Section 10.6.1) — the string renders one grain and the engine iterates. `TEMPLATE <identifier>` is a reference to a registered template; the two are distinguished by token class (quoted = body, bare = name).
 
 ### 10.2 Custom Templates (Mustache-subset)
 
@@ -1520,13 +1524,63 @@ CAL/1 ASSEMBLE conversation_context
 ```
 
 **Inline templates:**
+
+An inline template supplies a body at the point of use instead of naming a
+registered one. Two forms are available — a braced section list, and a bare
+string:
+
 ```sql
 FORMAT TEMPLATE {
   ELEMENT {
 - [{{grain.type}}] {{grain.content}}{{#grain.confidence}} ({{grain.confidence}}){{/grain.confidence}}
   }
 }
+
+FORMAT TEMPLATE "- [{{grain.type}}] {{grain.content}}"
 ```
+
+#### 10.6.1 The `ELEMENT` Shorthand
+
+A template whose only section is `ELEMENT` — by far the most common case —
+MAY be written as a single string in place of the section list. The string
+form is defined by equivalence:
+
+> `TEMPLATE "<text>"` is exactly equivalent to `TEMPLATE { ELEMENT { <text> } }`,
+> and `DEFINE TEMPLATE <name> AS "<text>"` is exactly equivalent to
+> `DEFINE TEMPLATE <name> ELEMENT { <text> }`.
+
+The shorthand is therefore **per-element**, not whole-result: the string is the
+rendering of *one* grain, the engine iterates, and elements are emitted exactly
+as they are for an `ELEMENT` section. It introduces no second rendering model,
+no additional variables, and no separate scope — `{{grain.*}}` is bound per
+grain, as in any `ELEMENT` body.
+
+```sql
+-- These two definitions are indistinguishable to the engine.
+CAL/1 DEFINE TEMPLATE oneliner AS "{{grain.subject}}: {{grain.content}}"
+
+CAL/1 DEFINE TEMPLATE oneliner
+  ELEMENT {
+{{grain.subject}}: {{grain.content}}
+  }
+```
+
+Because the shorthand *is* an `ELEMENT` section, everything defined for
+sections applies to it unchanged: `EXTENDS` composes normally (Section 10.7 —
+undefined sections, including `ELEMENT_SUMMARY` under budget pressure, come
+from the parent preset), the Section 10.8 limits apply to the string as the
+template body, and the Section 10.2 Mustache subset and Section 10.5 variable
+set are the same.
+
+The named and inline forms are disambiguated by token class, not by lookahead:
+`TEMPLATE <identifier>` is a reference to a registered template,
+`TEMPLATE <string>` is a shorthand body, `TEMPLATE { ... }` is a section list.
+Template names are identifiers (`template_name = identifier`) precisely so that
+a quoted argument is always a body and never a name.
+
+A template that needs more than one section — a `HEADER`, a `FOOTER`, an
+explicit `ELEMENT_SUMMARY`, a `SOURCE_BREAK` — MUST use the section list. A
+definition MUST NOT combine the two forms.
 
 **All 12 grain types rendered:**
 ```sml
@@ -1572,6 +1626,8 @@ FORMAT TEMPLATE {
 Templates inherit from presets via `EXTENDS`. Sections not defined in the template use the parent preset's definition. Inheritance depth is limited to 1 (template -> preset only). Default parent is `readable`.
 
 The `data` preset cannot be extended (it outputs structural JSON, not template-driven text).
+
+Inheritance is defined over sections, so it applies to the `ELEMENT` shorthand (Section 10.6.1) without special-casing: a shorthand template defines `ELEMENT` and inherits every other section — including the `ELEMENT_SUMMARY` the engine substitutes under budget pressure — from its parent.
 
 ### 10.8 Template Safety Model
 
@@ -2044,7 +2100,7 @@ When the query specifies a format list (`FORMAT [markdown, json]`), the response
 }
 ```
 
-**With aliases** (`FORMAT [json AS structured, TEMPLATE "{{subject}}: {{object}}" AS oneliner]`):
+**With aliases** (`FORMAT [json AS structured, TEMPLATE "{{grain.subject}}: {{grain.object}}" AS oneliner]`):
 
 ```json
 {
@@ -2570,6 +2626,7 @@ Everything in Extended, plus:
 Everything in Evolve, plus:
 - Streaming ASSEMBLE (`STREAM` clause, SSE transport, cancellation)
 - Custom FORMAT templates (`DEFINE TEMPLATE`, inline templates, named references)
+- The `ELEMENT` shorthand (`DEFINE TEMPLATE x AS "..."`, `FORMAT TEMPLATE "..."`)
 - Template inheritance from presets
 - Template validation (error codes CAL-E085 through CAL-E096)
 - Content Projection Model and `PROJECT` clause
@@ -2686,12 +2743,14 @@ It can read, assemble, and evolve memories, but never delete them.
   ASSEMBLE ... STREAM { progress, chunks }     -- specific events
 
 ### Custom templates:
-  FORMAT TEMPLATE name                         -- use named template
+  FORMAT TEMPLATE name                         -- use named template (bare = name)
   FORMAT TEMPLATE { ELEMENT { <{{grain.type}}>{{grain.content}}</{{grain.type}}> } }
+  FORMAT TEMPLATE "{{grain.subject}}: {{grain.content}}"   -- ELEMENT shorthand (quoted = body)
+  DEFINE TEMPLATE oneliner AS "{{grain.subject}}: {{grain.content}}"
 
 ### Format aliases (in bracketed lists):
   FORMAT [json AS customers, markdown AS report]
-  FORMAT [TEMPLATE "{{subject}}" AS names, TEMPLATE "{{object}}" AS values]
+  FORMAT [TEMPLATE "{{grain.subject}}" AS names, TEMPLATE "{{grain.object}}" AS values]
 
 ### Output formats:
   sml (default structured): flat tag-based — <fact subject="alice" confidence="0.92">prefers dark mode</fact>
@@ -2989,7 +3048,7 @@ CHUNK, PAUSE, RESUME, CANCEL
 
 | Version | Date | Change |
 |---------|------|--------|
-| 1.2 | 2026-07-20 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Backward-compatible. |
+| 1.2 | 2026-07-20 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Also adds the **`ELEMENT` shorthand** for custom templates (Section 10.6.1): `DEFINE TEMPLATE <name> AS "<text>"` and `FORMAT TEMPLATE "<text>"`, both defined by equivalence to an `ELEMENT` section, plus the `template_shorthand` production and `"TEMPLATE" , string_literal` in `format_spec`. This also corrects two 1.1 defects in the same examples (Sections 10.1.1, 14.2.1, 27): the `TEMPLATE "..."` form they use was not admitted by the Section 7 grammar, and they interpolated bare `{{subject}}`/`{{object}}` rather than the `grain.` namespace that Section 10.5 defines and Section 10.8 closes. Backward-compatible. |
 | 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. As part of the OMS v1.4 release, also adds the Skill grain type (`0x0B`) to the closed query set (`RECALL skills` / `ADD skill`, type-specific field set, `<skill>` projection, TOON columns, `mg:capable_of` in the `AGENCY` shortcut) and corrects `belief`/`action` literals the rename left behind (`grain_type_plural`, `RECALL MY`, TOON tables, `DESCRIBE` listing, `CAL-E051`). |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
 
