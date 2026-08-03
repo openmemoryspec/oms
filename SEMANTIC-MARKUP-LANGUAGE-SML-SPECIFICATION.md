@@ -1,6 +1,6 @@
-# SML (Semantic Markup Language) Specification v1.0
+# SML (Semantic Markup Language) Specification v1.1
 
-**Status:** Standards Track | **Date:** 2026-03-03 | **Version:** 1.0 | **Classification:** Experimental
+**Status:** Standards Track | **Date:** 2026-08-03 | **Version:** 1.1 | **Classification:** Experimental
 **Part of:** [Open Memory Specification (OMS) v1.5](./SPECIFICATION.md)
 
 ---
@@ -13,6 +13,7 @@
 3. [Comprehensive Example — All 12 Grain Types](#3-comprehensive-example--all-12-grain-types)
 4. [Progressive Disclosure](#4-progressive-disclosure)
 - [Appendix A: Relationship to CAL](#appendix-a-relationship-to-cal)
+- [Appendix B: Version History](#appendix-b-version-history)
 
 ---
 
@@ -125,3 +126,20 @@ SML is produced by the CAL `ASSEMBLE` statement's `FORMAT` system. The CAL speci
 - Progressive disclosure levels (`summary`, `standard`, `full`)
 
 See the [CAL specification](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md) for the complete FORMAT system, template engine, and ASSEMBLE statement semantics.
+
+---
+
+## Appendix B: Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.1 | 2026-08-03 | Adds the `<recommendation>` element for the Recommendation grain type (`0x0C`), introduced in OMS v1.5 — rendering the proposal summary with `target`, `severity` and `analyzer` attributes — and extends the comprehensive example to all 12 grain types. Additive: every SML 1.0 document remains a valid SML 1.1 document. |
+| 1.0 | 2026-03-03 | Initial standalone specification, decoupled from CAL. Eleven grain-type elements, structural rules, and progressive disclosure levels. |
+
+---
+
+**Document Status:** This is the SML (Semantic Markup Language) Specification v1.1. SML is part of the Open Memory Specification (OMS) v1.5 — see [SPECIFICATION.md](./SPECIFICATION.md).
+
+**Last Updated:** 2026-08-03
+**License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
+**Copyright:** Public Domain (CC0 1.0 Universal)

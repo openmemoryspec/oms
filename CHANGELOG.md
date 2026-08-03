@@ -28,12 +28,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ### CAL 1.2 — Fixed
 
-- **`format_spec` did not admit the string-bodied inline template it documents** — the §10.1.1 alias examples (`FORMAT [json AS structured, TEMPLATE "{{subject}}: {{object}}" AS oneliner]`), the §14.2.1 multi-format response example, and the §27 quick reference have used `TEMPLATE "<text>"` since CAL 1.1, but the §7 grammar offered only `"TEMPLATE" , template_name` (an identifier) and `"TEMPLATE" , "{" , template_body , "}"` (a section list) — a quoted string matched neither, making four of the specification's own examples ungrammatical. `format_spec` now includes `"TEMPLATE" , string_literal`, and §10.6.1 gives it semantics. Errata for CAL 1.1; no conforming query changes meaning.
+- **`format_spec` did not admit the string-bodied inline template it documents** — the §10.1.1 alias examples (`FORMAT [json AS structured, TEMPLATE "{{subject}}: {{object}}" AS oneliner]`), the §14.2.1 multi-format response example, and the §27 quick reference have used `TEMPLATE "<text>"` since CAL 1.1, but the §4 grammar offered only `"TEMPLATE" , template_name` (an identifier) and `"TEMPLATE" , "{" , template_body , "}"` (a section list) — a quoted string matched neither, making four of the specification's own examples ungrammatical. `format_spec` now includes `"TEMPLATE" , string_literal`, and §10.6.1 gives it semantics. Errata for CAL 1.1; no conforming query changes meaning.
 - **Those same examples used variables outside the closed set** — they interpolated bare `{{subject}}`/`{{object}}`, which predate the §10.3–10.5 Content Projection Model. §10.5 defines only the `grain.` namespace and §10.8 fixes the variable set as **Closed** with undefined variables rendering as the empty string, so the §14.2.1 example claimed an output (`"alice: dark mode"`) that a conforming engine would have rendered as `": "`. Updated to `{{grain.subject}}`/`{{grain.object}}` in §10.1.1, §14.2.1 and §27. Errata for CAL 1.1.
 
-### SML — Added
+### SML 1.1 — Added
 
 - **`<recommendation>` element** — SML tag for the Recommendation grain, rendering the proposal summary with `target`/`severity` attributes; added to the flat tag set and the all-types rendering example.
+- **SML bumped 1.0 → 1.1** with a version-history appendix and document-status footer. The element set changed, so the version had to move: two documents both labelled "SML 1.0" would otherwise differ in element set with nothing to distinguish them. Additive — every SML 1.0 document remains a valid SML 1.1 document.
 
 ---
 
