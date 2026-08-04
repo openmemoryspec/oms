@@ -1,6 +1,6 @@
 # Open Memory Specification (OMS)
 
-**Version:** 1.4 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
+**Version:** 1.5 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
 
 Backed by [areev.ai](https://areev.ai).
 
@@ -49,6 +49,7 @@ Think of the `.mg` container as what JSON is to APIs or `.git` objects are to ve
 | Consensus | `0x09` | Multi-agent agreement record |
 | Consent | `0x0A` | DID-scoped permission grant or withdrawal |
 | Skill | `0x0B` | Packaged, reusable agent capability: definition plus optional learned proficiency |
+| Recommendation | `0x0C` | Governed, auditable proposal to change memory or agent config: reviewed, applied, rollback-able |
 | `0xF0–0xFF` | — | Application-defined domain profile types |
 
 ### Blob Layout
@@ -167,7 +168,7 @@ SML is **not XML**. It requires no parser, no schema, no escape sequences. An LL
 
 ### Structural Rules
 
-1. **Tag names are grain types.** `<fact>`, `<goal>`, `<event>`, `<tool>`, `<observation>`, `<reasoning>`, `<state>`, `<workflow>`, `<consensus>`, `<consent>`, `<skill>` — no others.
+1. **Tag names are grain types.** `<fact>`, `<goal>`, `<event>`, `<tool>`, `<observation>`, `<reasoning>`, `<state>`, `<workflow>`, `<consensus>`, `<consent>`, `<skill>`, `<recommendation>` — no others.
 2. **Flat only.** No nesting beyond the `<context>` envelope.
 3. **No storage internals.** No hashes, namespaces, or OMS metadata in the output.
 4. **Natural language content.** Element text is prose, not decomposed triples.

@@ -9,6 +9,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
+## [1.5] — 2026-08-03
+
+### Added
+
+- **Recommendation grain type (`0x0C`, §8.12)** — new dedicated cognitive grain type for a governed, auditable **proposal to change memory or agent configuration**. Realized from the `0x0C–0xEF` reserved range following the Skill (`0x0B`) precedent. A Recommendation names a `target_ref` (`grain:` / `entity:` / `query:` / `template:` / `doc:` / `host:` scheme), the producing `analyzer` (`{id, params}`), a deterministic `summary` (`{template_id, args}` — never analyzer free prose), a computed `dedup_key`, and exactly one proposal (`proposal_cal` / `proposal_edit` / `proposal_data`). Optional: `severity`, `metric_snapshot`, `evidence_query`; evidence and scoring reuse the common `derived_from` (evidence hashes), `confidence`, `importance`, and `valid_to` (expiry). It never mutates memory by itself — it enters a propose → review → apply → roll-back lifecycle (§8.12.1) whose transitions are immutable audit Observation grains, and its review state (`rec_status`) is a rebuildable index-layer cache, so the content address is stable across lifecycle transitions while a change in *content* is a supersession sharing one `dedup_key` — `dedup_key`, not the content address, is what stays constant across a supersession chain. A supersession resets `rec_status` to `pending`, so an approval never carries forward to content no reviewer has seen. Byte values `0x01`–`0x0B` are unchanged; existing content addresses remain valid.
+- **§6.13 Recommendation-Specific Fields** — compaction table for the type's fields (`tref`, `anlz`, `summ`, `ddk`, `pcal`, `pedit`, `pdata`, `sev`, `msnap`, `evq`). (Former §6.13 Compaction Rules renumbered to §6.14.)
+- **Recommendation compaction (Appendix C)** — added a Recommendation-Specific Fields compaction block.
+- **Grain-type table (§3.1), glossary, ABNF `type-byte` (Appendix B), the §8 type count, and conformance Level 1** updated to include Recommendation (`0x0C`); reserved range narrowed to `0x0D–0xEF`.
+- **`rec_status` as an index-layer field** — enumerated in §5.6, §6.1 (short key `rstat`), §11.7 and §28.3 alongside `superseded_by` and `verification_status`, so the general prohibition on writers setting index-layer fields binds it. §11.7 classifies it **Rebuildable**: an importer MUST reconstruct it from the audit chain and MUST NOT trust an imported value.
+- **Normative `dedup_key` construction (§8.12 rule 5)** — a concrete recipe (lowercase hex SHA-256 over NUL-separated analyzer-family, `target_ref`, action-kind, with defined normalization), so independent implementations derive identical keys and dedup survives import, federation and forking.
+- **Applier obligations (§8.12 rules 8–9)** — a stored `proposal_cal` executes under the **approving** principal's capability (never the analyzer's), MUST NOT write outside the recommendation's own namespace, and is bounded by CAL's `MAX_QUERY_LENGTH` and Tier-1 write quotas. `proposal_edit` requires a `doc:` allowlist check and a `base_digest` match; `proposal_data` requires host-schema validation.
+
+### CAL 1.2 — Added
+
+- **Recommendation grain support** — `recommendation`/`recommendations` added to the closed grain-type set (§5.1); `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`); `<recommendation>` content-projection rule; TOON column set; field-count row; grammar productions `grain_type_plural`, `grain_type_singular`, `grain_field_name`, and new `recommendation_field`; the `DESCRIBE` type listing and the JSON `valid_values` enum. Recommendation is **query-only** — engine-emitted and lifecycle-gated — so it is deliberately absent from the CAL-addable set (no `ADD recommendation`; lifecycle transitions never occur via `ADD`/`SUPERSEDE SET`). Backward-compatible.
+- **`ELEMENT` shorthand for custom templates (§10.6.1)** — a template whose only section is `ELEMENT` may now be written as a single string: `DEFINE TEMPLATE oneliner AS "{{grain.subject}}: {{grain.content}}"` and, inline, `FORMAT TEMPLATE "<text>"`. Both are defined **by equivalence** to `ELEMENT { <text> }`, so the shorthand is per-element rather than whole-result and introduces no second rendering model, no new variables, and no new scope; `EXTENDS` (§10.7), the §10.8 limits, the §10.2 Mustache subset and the §10.5 variable set all apply unchanged. Named and inline forms are disambiguated by token class — `TEMPLATE <identifier>` is a reference, `TEMPLATE <string>` is a body, `TEMPLATE { ... }` is a section list — which is why `template_name` remains `identifier`. New grammar production `template_shorthand`; `define_template_stmt` takes `( template_body | template_shorthand )`. A definition may not combine the two forms, and a template needing `HEADER`, `FOOTER`, an explicit `ELEMENT_SUMMARY` or `SOURCE_BREAK` still uses the section list. Backward-compatible.
+
+### CAL 1.2 — Fixed
+
+- **`format_spec` did not admit the string-bodied inline template it documents** — the §10.1.1 alias examples (`FORMAT [json AS structured, TEMPLATE "{{subject}}: {{object}}" AS oneliner]`), the §14.2.1 multi-format response example, and the §27 quick reference have used `TEMPLATE "<text>"` since CAL 1.1, but the §4 grammar offered only `"TEMPLATE" , template_name` (an identifier) and `"TEMPLATE" , "{" , template_body , "}"` (a section list) — a quoted string matched neither, making four of the specification's own examples ungrammatical. `format_spec` now includes `"TEMPLATE" , string_literal`, and §10.6.1 gives it semantics. Errata for CAL 1.1; no conforming query changes meaning.
+- **Those same examples used variables outside the closed set** — they interpolated bare `{{subject}}`/`{{object}}`, which predate the §10.3–10.5 Content Projection Model. §10.5 defines only the `grain.` namespace and §10.8 fixes the variable set as **Closed** with undefined variables rendering as the empty string, so the §14.2.1 example claimed an output (`"alice: dark mode"`) that a conforming engine would have rendered as `": "`. Updated to `{{grain.subject}}`/`{{grain.object}}` in §10.1.1, §14.2.1 and §27. Errata for CAL 1.1.
+
+### SML 1.1 — Added
+
+- **`<recommendation>` element** — SML tag for the Recommendation grain, rendering the proposal summary with `target`/`severity` attributes; added to the flat tag set and the all-types rendering example.
+- **SML bumped 1.0 → 1.1** with a version-history appendix and document-status footer. The element set changed, so the version had to move: two documents both labelled "SML 1.0" would otherwise differ in element set with nothing to distinguish them. Additive — every SML 1.0 document remains a valid SML 1.1 document.
+
+---
+
 ## [1.4] — 2026-06-13
 
 ### Added

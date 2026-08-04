@@ -1,7 +1,7 @@
-# SML (Semantic Markup Language) Specification v1.0
+# SML (Semantic Markup Language) Specification v1.1
 
-**Status:** Standards Track | **Date:** 2026-03-03 | **Version:** 1.0 | **Classification:** Experimental
-**Part of:** [Open Memory Specification (OMS) v1.4](./SPECIFICATION.md)
+**Status:** Standards Track | **Date:** 2026-08-03 | **Version:** 1.1 | **Classification:** Experimental
+**Part of:** [Open Memory Specification (OMS) v1.5](./SPECIFICATION.md)
 
 ---
 
@@ -10,9 +10,10 @@
 - [Abstract](#abstract)
 1. [What is SML?](#1-what-is-sml)
 2. [Structural Rules](#2-structural-rules)
-3. [Comprehensive Example — All 11 Grain Types](#3-comprehensive-example--all-11-grain-types)
+3. [Comprehensive Example — All 12 Grain Types](#3-comprehensive-example--all-12-grain-types)
 4. [Progressive Disclosure](#4-progressive-disclosure)
 - [Appendix A: Relationship to CAL](#appendix-a-relationship-to-cal)
+- [Appendix B: Version History](#appendix-b-version-history)
 
 ---
 
@@ -22,7 +23,7 @@
 
 SML uses tag syntax as a **semantic signalling device** — the tag name tells the LLM what kind of information follows (using OMS grain types as tag names), the attributes carry lightweight decision metadata, and the element text is natural language content.
 
-SML is part of the [Open Memory Specification (OMS) v1.4](./SPECIFICATION.md) family. The `FORMAT` system that produces SML output is defined in the [Context Assembly Language (CAL) specification](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md).
+SML is part of the [Open Memory Specification (OMS) v1.5](./SPECIFICATION.md) family. The `FORMAT` system that produces SML output is defined in the [Context Assembly Language (CAL) specification](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md).
 
 ---
 
@@ -57,7 +58,7 @@ The formatted output uses a **flat, semantic structure**:
 
 ---
 
-## 3. Comprehensive Example — All 11 Grain Types
+## 3. Comprehensive Example — All 12 Grain Types
 
 The following example shows a single assembled context covering every grain type. The scenario: an agent helping alice prepare her Q1 engineering review.
 
@@ -94,10 +95,12 @@ The following example shows a single assembled context covering every grain type
 
   <skill name="metrics_review" proficiency="0.82" domain="software">summarise quarterly engineering metrics and surface the reliability narrative</skill>
 
+  <recommendation target="entity:alice/velocity" severity="low">consolidate 2 duplicate "week 8 velocity" observations into one</recommendation>
+
 </context>
 ```
 
-Each element maps directly to one grain type. The LLM reads the tag to understand the epistemic status of the content — a `<fact>` carries a known confidence, a `<reasoning>` signals inference, a `<consent>` signals an explicit permission grant, a `<skill>` signals a packaged, reusable capability — without needing to parse attribute schemas or understand OMS internals.
+Each element maps directly to one grain type. The LLM reads the tag to understand the epistemic status of the content — a `<fact>` carries a known confidence, a `<reasoning>` signals inference, a `<consent>` signals an explicit permission grant, a `<skill>` signals a packaged, reusable capability, a `<recommendation>` signals a proposed, reviewable change — without needing to parse attribute schemas or understand OMS internals.
 
 ---
 
@@ -123,3 +126,20 @@ SML is produced by the CAL `ASSEMBLE` statement's `FORMAT` system. The CAL speci
 - Progressive disclosure levels (`summary`, `standard`, `full`)
 
 See the [CAL specification](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md) for the complete FORMAT system, template engine, and ASSEMBLE statement semantics.
+
+---
+
+## Appendix B: Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.1 | 2026-08-03 | Adds the `<recommendation>` element for the Recommendation grain type (`0x0C`), introduced in OMS v1.5 — rendering the proposal summary with `target`, `severity` and `analyzer` attributes — and extends the comprehensive example to all 12 grain types. Additive: every SML 1.0 document remains a valid SML 1.1 document. |
+| 1.0 | 2026-03-03 | Initial standalone specification, decoupled from CAL. Eleven grain-type elements, structural rules, and progressive disclosure levels. |
+
+---
+
+**Document Status:** This is the SML (Semantic Markup Language) Specification v1.1. SML is part of the Open Memory Specification (OMS) v1.5 — see [SPECIFICATION.md](./SPECIFICATION.md).
+
+**Last Updated:** 2026-08-03
+**License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
+**Copyright:** Public Domain (CC0 1.0 Universal)
