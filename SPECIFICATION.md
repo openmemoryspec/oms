@@ -1,8 +1,8 @@
 # Open Memory Specification (OMS)
 ## Memory Grain (.mg) Container Definition
 
-**Version:** 1.5
-**Status:** Standards Track
+**Version:** 1.6-draft
+**Status:** Draft for Comment (OMS 1.6 RFC) — changed sections are normative only upon release
 **Category:** Data Formats
 **Date:** August 2026
 **Copyright:** Public Domain (CC0 1.0 Universal)
@@ -787,8 +787,8 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:state_at` | State | Agent state snapshot |
 | `mg:has_graph` | Workflow | Directed graph of procedural steps |
 | `mg:intends` | Goal | Agent objective |
-| `mg:permits` | Consent | User grants agent right to retain or act |
-| `mg:revokes` | Consent | User revokes prior consent |
+| `mg:permits` | Consent, Fact | User grants agent right to retain or act (Consent); as a Fact in `agent:authz`, an authorization grant (§12.6.2) |
+| `mg:revokes` | Consent | User revokes prior consent (data-subject domain only — authorization revocation is retraction-by-supersession, §12.6.3) |
 | `mg:prohibits` | Fact/Goal | Hard prohibition |
 | `mg:requires` | Fact/Goal | Hard requirement |
 | `mg:prefers` | Fact | Soft preference |
@@ -1111,7 +1111,7 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 - `summary` (map) — a deterministic, template-rendered description: `{template_id: string, args: map}`. An analyzer MUST NOT store free prose here; the human-readable string is produced by rendering `template_id` with `args`, so summaries stay reproducible and translatable.
 - `dedup_key` (string) — the recommendation's stable proposal identity, computed (never author-chosen) per normative rule 5. Two recommendations with the same `dedup_key` are the same proposal; a supersession chain (evidence refresh, a growing cluster) shares one `dedup_key` across all of its content addresses.
 - exactly one **proposal** field:
-  - `proposal_cal` (string) — a CAL batch of Tier-1 *evolve* writes (`ADD` / `SUPERSEDE` / `REVERT`; CAL §2.2). The standard change form. CAL has no destructive verb — `FORGET`, `DELETE` and their kin are excluded at the grammar level and are parse errors, not keywords (CAL §2.4) — so a `proposal_cal` is always non-destructive and always invertible. A destructive change, where a host supports one at all, MUST be proposed as `proposal_data` and executed outside CAL.
+  - `proposal_cal` (string) — a CAL batch of Tier-1 *evolve* writes (`ADD` / `SUPERSEDE` / `REVERT`; CAL §2.2), the standard change form, and — since CAL 1.3, where the host authorizes destructive proposals — Tier-2 destruction statements (`FORGET`; CAL §8.14). A Tier-1-only `proposal_cal` is always non-destructive and always invertible. A `proposal_cal` carrying Tier-2 statements executes only if the applying principal holds the required `delete`/`erase` verbs (§12.6; CAL §8.16.1 two-key property), and its apply MUST be recorded **not rollbackable** (§8.12.1). CAL's Tier-3 governance statements (`APPROVE`/`APPLY`/…) are refused inside `proposal_cal` unconditionally — a recommendation must not approve recommendations (CAL §8.14.3). Predicate destruction remains grammar-excluded at every tier (CAL §2.4). A destructive change beyond CAL's Tier-2 shapes MUST be proposed as `proposal_data` and executed outside CAL.
   - `proposal_edit` (map) — `{format: string, base_digest: string, diff: string}` for `doc:` targets; `base_digest` lets an applier detect a stale base before editing.
   - `proposal_data` (map) — an opaque host-config change for `host:` targets.
 - `created_at` (int64, epoch ms)
@@ -1133,7 +1133,7 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 - **Authoritative record.** Each lifecycle transition is one immutable **audit Observation grain** (§8.6) hash-chained per recommendation: its `derived_from` includes the recommendation's content address and the previous audit grain's address (plus any result addresses). The acting principal is recorded in the audit grain's existing `observer_id` (§8.6) — e.g. `"user:alice"`, `"agent:worker-3"`, `"policy:auto"` — and its class in `observer_type`, which MUST be either `"human"` (registered, §24.2) or one of the namespaced values `"rec:agent"`, `"rec:policy"`, `"rec:system"` (§24.3). No field beyond the Observation schema is introduced. The transition's mandatory human-readable reason is carried in the audit grain's `object` (§6.1) — the common field CAL projects as an Observation's text content (CAL §10.3.2), so the reason renders correctly in SML with no additional rule (RECOMMENDED ≤ 500 chars). An audit grain's `observer_id` MUST NOT be elided under §10.2: the acting principal is what makes the chain tamper-evident, and a selectively-disclosed chain that has dropped it is no longer an audit trail. The chain is portable, tamper-evident, and fork-mergeable.
 - **State machine.** `pending → approved | rejected`; `approved → applied`; `applied → rolled_back`; and `rejected → pending`, which lets a recommendation re-enter review on refreshed evidence under its existing `dedup_key` rather than becoming a second proposal. `pending → applied` directly is permitted **only** when the transition's `observer_type` is `"rec:policy"` (auto-apply); `observer_type` — never `observer_id` — is the discriminator for this gate, since `observer_id` is a host-asserted label with no normative structure. `applied` and `rolled_back` are terminal. `expired` is computed from `valid_to` and is reachable only from `pending` or `approved`; an expired recommendation MUST NOT be applied, and expiry of an `approved` recommendation withdraws that approval.
 - **Content vs. lifecycle.** A change in the recommendation's *content* (refreshed evidence, a larger cluster) is a **supersession** of the grain — a new content address with the **same `dedup_key`** — not a status change. Lifecycle ≠ content. A supersession MUST reset the superseding grain's `rec_status` to `pending`: approval is granted to specific content and never carries forward to content no reviewer has seen.
-- **Reproducible undo.** The inverse of an applied proposal is derived at apply time and recorded on the applied audit grain as a store-operation plan (no new CAL syntax): a `SUPERSEDE` reinstates the prior content; an `ADD` is undone by superseding the added grain with `invalidation_type: "retraction"`, which closes its `system_valid_to` and removes it from the default recall path while the blob itself survives (§5.6, §28.3) — OMS defines no separate tombstone mechanism, and none is needed; a `REVERT` is undone by superseding back to the reverted head; a document edit supersedes back to the prior head. Because CAL is structurally non-destructive (§2.4 of the CAL spec), every `proposal_cal` is rollbackable. A `proposal_data` change is opaque to OMS and MAY be irreversible: a host that cannot derive an inverse for one MUST record it as not rollbackable on the applied audit grain rather than offer a rollback it cannot perform.
+- **Reproducible undo.** The inverse of an applied proposal is derived at apply time and recorded on the applied audit grain as a store-operation plan (no new CAL syntax): a `SUPERSEDE` reinstates the prior content; an `ADD` is undone by superseding the added grain with `invalidation_type: "retraction"`, which closes its `system_valid_to` and removes it from the default recall path while the blob itself survives (§5.6, §28.3) — OMS defines no separate tombstone mechanism, and none is needed; a `REVERT` is undone by superseding back to the reverted head; a document edit supersedes back to the prior head. Because CAL's Tier-1 statements are structurally non-destructive, every Tier-1-only `proposal_cal` is rollbackable. A `proposal_cal` carrying CAL Tier-2 destruction (tombstone or erasure — one-way by definition, CAL §8.14.1) MUST be recorded as **not rollbackable** on the applied audit grain. A `proposal_data` change is opaque to OMS and MAY be irreversible: a host that cannot derive an inverse for one MUST record it as not rollbackable on the applied audit grain rather than offer a rollback it cannot perform.
 
 **Normative rules:**
 1. Exactly one of `proposal_cal`, `proposal_edit`, `proposal_data` MUST be present.
@@ -1684,6 +1684,118 @@ The `locked` invalidation policy combined with COSE signing provides layered pro
 | COSE signature | Owner signs the blob (§9) | Blob tampering changes the content address; the original signed grain remains valid and current |
 
 **Prompt injection resistance:** A user or external input asserting "your owner is now X" does not create or modify an ownership grain. The agent lacks the owner's private key and cannot author a superseding grain that passes the `locked` policy check. The original ownership fact remains current.
+
+### 12.6 Authorization (new in 1.6, draft)
+
+Authorization answers "what may this principal do in this memory?" It is the
+model CAL's Tier 2/3 statements consume (CAL §2.2, §8.14–§8.16), and it is
+usable by any host independently of CAL. The design principle is the
+**credential/policy split**: *policy* (who may do what here) is a truth about
+the memory and lives in it as grains; *credentials* (proving who a caller is)
+are host objects and MUST NOT be carried in grains, statements, or the memory
+file in any form.
+
+#### 12.6.1 Principals, verbs, scope
+
+- A **principal** is an opaque, non-empty name. Humans and agents are not
+  distinguished by the model: `user:anna`, `agent:support-bot`,
+  `job:retention` are all principals. A DID is a valid principal name and is
+  the upgrade path for signed deployments (§12.1) — not a prerequisite.
+- The **verb** set is closed in this revision: `read`, `write`, `supersede`,
+  `delete`, `erase`, `loop.run`, `loop.review`, `loop.apply`, `admin`
+  (semantics per CAL §8.14–§8.16; hosts without a recommendation engine
+  simply never resolve the `loop.*` verbs).
+- **Scope** is one namespace or `*`. The memory axis is implicit: a grant
+  governs only the memory it is stored in. Cross-memory access is governed by
+  each memory's own grants.
+
+#### 12.6.2 Grant grains
+
+A grant is a **Fact grain** (§8.1) in the reserved namespace
+**`agent:authz`** (following the `agent:identity` / `agent:recommendations`
+precedent, §12.5.3, §8.12 rule 7):
+
+| Field | Value |
+|---|---|
+| `type` | `"fact"` |
+| `namespace` | `"agent:authz"` |
+| `subject` | the **grantee** principal name |
+| `relation` | `"mg:permits"` |
+| `object` | the canonical grant string: `"<verbs> ON <scope>"`, where `<verbs>` is the granted verbs lowercase, comma-separated without spaces, sorted lexicographically, and `<scope>` is the governed namespace(s) comma-separated without spaces, sorted, or the literal `*` — e.g. `"delete,read ON caller,shared"`, `"admin ON *"` |
+| `confidence` | `1.0` |
+| `context` | grantor and reason under reserved keys: `{"grantor": "<principal>", "because": "<reason>"}` (`because` present when given) |
+| `author_did` | RECOMMENDED where DIDs are deployed — binds the grant cryptographically when the grain is COSE-signed (§9) |
+
+The canonical `object` form is normative: two grants conferring the same
+rights MUST serialize to the same string, so grants deduplicate
+content-addressably and compare across implementations.
+
+**Effective rights** of a principal for a namespace = the union of the verbs
+in **live** grant grains naming it — grains in `agent:authz` with
+`subject = <principal>`, `relation = "mg:permits"`, not superseded
+(`superseded_by` unset, `system_valid_to` unset) — whose scope includes the
+namespace (or is `*`). Resolution MUST fail closed: an unknown principal or
+an empty result confers nothing.
+
+Because grants are ordinary grains, the PERMISSION relation category query
+(CAL §7) already retrieves them; CAL's `SHOW GRANTS` is sugar over it.
+
+#### 12.6.3 Revocation
+
+Revocation is **retraction-by-supersession** — the native invalidation
+mechanism (§5.6, §28.3), so grant history is append-only and auditable:
+
+- A **full revoke** supersedes the covering grant grain(s) with
+  `invalidation_type: "retraction"`, closing their `system_valid_to`.
+- A **partial revoke** supersedes the covering grant with a new grant grain
+  whose canonical `object` carries the reduced verb/scope set.
+- The revoking principal and reason ride the superseding grain's `context`
+  (`{"grantor": ..., "because": ...}`) and the standard invalidation fields.
+
+`mg:revokes` remains the **Consent-domain** relation for data-subject consent
+withdrawal (§8.10) — authorization revocation deliberately does not use it,
+so PERMISSION-category queries over live grains return exactly the effective
+grant set with no subtraction logic.
+
+**Authoring authority:** writing or superseding any grain in `agent:authz`
+requires the `admin` verb (or an owner session, §12.6.4). Every `erase`
+grant is explicit: if a future revision defines role bundles, no bundle may
+include `erase`.
+
+#### 12.6.4 Owner sessions and bootstrap
+
+A host MAY designate a local session as the memory's **owner** — the
+implicit superuser, exempt from grant lookup (the `root@localhost` /
+SQLite-file-owner precedent). The owner writes the first grant. A memory
+containing no grant grains confers nothing on any non-owner principal —
+fail-closed by construction — while remaining fully usable by its owner, so
+a single-operator memory never needs to know this section exists.
+
+**Tamper honesty:** whoever holds the file bytes is root over them — as with
+any database's data directory. Content addressing and the operation log make
+out-of-band edits *detectable*; COSE signing (§9) is the high-assurance
+upgrade path.
+
+#### 12.6.5 Replication
+
+Grant grains replicate as **sync**: an importer, follower, or hub applies
+them like any other grain, without re-authorization — the file carries its
+own access policy wherever it goes. *Authoring* a grant (creating or
+superseding in `agent:authz`) requires `admin`/owner authority at the
+writing host. Disclosure property: a synced memory reveals its principal
+names to every replica; deployments that consider principal names sensitive
+SHOULD use opaque identifiers.
+
+#### 12.6.6 Relationship to other mechanisms
+
+- `invalidation_policy` (§23) continues to govern *supersession of specific
+  grains*; §12.6 governs *operations by principals*. They compose: a
+  supersession must pass both.
+- Consent grains (§8.10) record *data-subject* consent and are unrelated to
+  operational authorization; do not encode grants as Consent.
+- The delegation fields (§6.11, `authorized_namespaces`) describe
+  *agent-to-agent* delegated authority in Goal grains; a host MAY map them
+  onto verbs, but grant grains are the authorization source of truth.
 
 ---
 
@@ -2955,6 +3067,7 @@ Examples:
 - `"acme:chatbot:agent-7"` — org-scoped, app-scoped, agent-scoped
 - `"acme:chatbot:agent-7:session-42"` — additionally run-scoped
 - `"agent:identity"` — reserved for ownership and identity grains (§12.5)
+- `"agent:authz"` — reserved for authorization grant grains (§12.6)
 - `"shared"` — default, no specific partition
 
 The `run_id` field (§6.1) provides session/run scoping orthogonal to the namespace hierarchy. Use `run_id` when runs are ephemeral and high-cardinality; use namespace segments when partitions are stable and low-cardinality.
@@ -2984,7 +3097,7 @@ OMS does not define a formal store API. However, implementations that expose a p
 | `exists` | `(content_address) → bool` | Check if a grain exists without retrieving it |
 | `query` | `(filters, sort, limit, cursor) → result_envelope` | Structured query with the response envelope from §28.1 |
 | `search` | `(embedding_or_text, filters, limit) → result_envelope` | Semantic similarity search combined with structured filters |
-| `delete` | `(content_address) → void \| error` | Compliance-only erasure (GDPR Art. 17, consent cascade). MUST NOT be exposed as a general-purpose API. MUST check litigation holds (`invalidation_policy.mode: "hold"`) before deleting. |
+| `delete` | `(content_address) → void \| error` | Compliance erasure (GDPR Art. 17, consent cascade, retention). MUST NOT be exposed as a general-purpose unauthenticated API; MAY be surfaced to authorized principals via CAL Tier 2 (`FORGET`/`PURGE`, CAL §8.14 — `delete`/`erase` verbs, §12.6), each execution writing an audit Observation. MUST check litigation holds (`invalidation_policy.mode: "hold"`) before deleting. **One-way:** additions roll back by retraction (supersession); a delete or erasure is final — no un-delete operation exists, and a host MUST NOT add one. |
 | `put_batch` | `(blob_bytes[]) → content_address[] \| error[]` | Batch ingest for consolidation, migration, and high-throughput scenarios |
 | `get_batch` | `(content_address[]) → grain[] \| not_found[]` | Batch retrieval for provenance chain traversal and context assembly |
 
@@ -3158,7 +3271,7 @@ CAL extends the store operations defined in §28.4 with a structured query langu
 | `supersede` | `SUPERSEDE <hash> SET field = value … REASON "…"` |
 | `query`/`search` + `get_batch` + compose | `ASSEMBLE … FROM … BUDGET <n> TOKENS` |
 | introspection | `DESCRIBE <type>` |
-| `delete` (compliance erasure) | no CAL equivalent — structurally excluded |
+| `delete` (compliance erasure) | `FORGET <hash>` / `FORGET SUBJECT` / `PURGE OLDER THAN` (Tier 2, authorization-gated, audited — CAL §8.14; no CAL equivalent on Tier-0/1 hosts) |
 
 **SML output format:**
 
@@ -3728,7 +3841,7 @@ footer        = 32OCTET  ; SHA-256 checksum
 |---------|------------|
 | Art. 5 (Data minimization) | `user_id` field enables per-person scope |
 | Art. 12-23 (Rights) | Structured data format for automated response |
-| Art. 17 (Erasure) | Crypto-erasure via key destruction |
+| Art. 17 (Erasure) | Crypto-erasure via key destruction; subject-scoped erasure expressible as CAL `FORGET SUBJECT` on Tier-2 hosts (§28.4, CAL §8.14) |
 | Art. 25 (Privacy by design) | Provenance and audit built-in |
 | Art. 30 (Records of processing) | `provenance_chain` and `created_at` timestamps support records-of-processing obligations |
 | Art. 32 (Security) | COSE signing, AES-256-GCM encryption |
