@@ -1,6 +1,6 @@
 # Open Memory Specification (OMS)
 
-**Version:** 1.5 | **Status:** Standards Track | **License:** CC0 1.0 Universal (Public Domain)
+**Version:** 1.6-draft (1.5 released) | **Status:** Standards Track — 1.6/CAL 1.3 open for comment | **License:** CC0 1.0 Universal (Public Domain)
 
 Backed by [areev.ai](https://areev.ai).
 
@@ -9,7 +9,7 @@ OMS is an open standard for portable, auditable, and interoperable agent memory.
 | Layer | Spec | Role |
 |-------|------|------|
 | **Storage** | OMS — Open Memory Specification | Binary `.mg` container: how grains are encoded, hashed, signed, and stored |
-| **Query** | CAL — Context Assembly Language | Non-destructive language for recalling and assembling agent context |
+| **Query** | CAL — Context Assembly Language | Language for recalling, assembling, and evolving agent context — append-only by construction; destruction and access control authorization-gated (1.3 draft) |
 | **Output** | SML — Semantic Markup Language | Tag-based LLM context format produced by CAL `ASSEMBLE` |
 
 ---

@@ -9,6 +9,85 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
+## [1.6-draft] — 2026-08-10 (RFC, open for comment)
+
+> This entry describes a **draft**. The `release/oms-v1.6` branch is the
+> comment window; nothing below is normative until release.
+
+### CAL 1.3 — the pillar changes, on purpose and in the open
+
+CAL 1.0–1.2 promised "non-destructive by grammar; no unsafe mode." The
+promise was true and had a hidden cost: real deployments still needed
+erasure — GDPR, retention — so destruction happened anyway, outside the
+language, ungoverned by any spec. Exiling destruction never prevented it; it
+only prevented *specifying* it. 1.3 brings it inside, where grammar bounds
+its shape (whole grains by hash, identity, or age — never a predicate, never
+a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and
+the audit trail sees it. Every 1.0–1.2 document remains valid Tier-0/1 CAL;
+for any session without grants, CAL is still exactly the language those
+releases promised — now the shared floor, not a ceiling that pushed
+dangerous operations off the books.
+
+#### CAL 1.3 — Added
+
+- **Four-tier capability model** (§2.2): Tier 0 Core, Tier 1 Evolve, Tier 2
+  Destroy, Tier 3 Control. **Tiers gate operations, not portability** —
+  interop rides the `.mg` file and Tier-0 reads; a read-only implementation
+  remains fully conformant forever. New `cal_tiers` conformance declaration;
+  `DESCRIBE capabilities` reports the host's tiers.
+- **Tier 2 — Destroy** (§8.14): `FORGET <hash>` (reason optional but
+  recorded), `FORGET SUBJECT <id> [WITH text_mentions] BECAUSE "…"`, and
+  `PURGE OLDER THAN <duration> [TYPE <t>] BECAUSE "…"`. Requires the
+  `delete`/`erase` verbs; fail-closed; one-way; every execution writes an
+  in-memory audit Observation (§8.14.4) following the §8.12.1 audit pattern.
+- **Tier 3 — Control** (§8.15): `GRANT`/`REVOKE` verbs on a namespace for a
+  principal, `SHOW GRANTS`, `DESCRIBE PRINCIPAL` — over grant grains stored
+  in the memory itself (OMS §12.6). `REVOKE` is retraction-by-supersession;
+  grant history is append-only. `DEFINE ROLE` reserved, deferred.
+- **Tier 3 — Governance** (§8.16): `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`
+  with `BECAUSE` mandatory as *syntax*, `RUN LOOP [FULL]`, and the
+  `DESCRIBE loop|analyzers|outcomes|policy` reads. Self-approval refused
+  against the creating actor and the triggering principal; observer type
+  derives from the principal's host record, never statement text; refused
+  inside `BATCH`, saved queries, and `proposal_cal`. Loop *policy* writes
+  stay permanently outside CAL (self-licensing).
+- **Principal-bound sessions and the credential/policy split** (§18.4):
+  hosts authenticate and resolve principals; grants resolve from the
+  memory; credentials never enter grains or statements; owner sessions
+  preserve the single-operator experience.
+- **Authorization error codes** CAL-E120–E125, with CAL-E121 messages
+  naming the missing verb and the `GRANT` that would confer it.
+
+#### CAL 1.3 — Changed
+
+- §2 Safety Model restated (see narrative above); `FORGET`/`PURGE` and
+  `GRANT`/`REVOKE` moved from the blocked-token list to tier-gated
+  keywords. `DELETE`, `ERASE`, `DESTROY`, `TRUNCATE` and all key/credential
+  vocabulary remain permanently excluded.
+
+### OMS 1.6 — Added
+
+- **§12.6 Authorization**: principals (humans and agents uniformly, DIDs as
+  the signed upgrade path), the closed verb set, namespace-scoped grants;
+  **grant grains** — Facts in the new reserved `agent:authz` namespace
+  (subject = grantee, `mg:permits`, canonical object string, grantor/reason
+  in `context`); effective rights = live heads, fail-closed; revocation by
+  retraction-by-supersession (`mg:revokes` stays consent-domain); owner
+  bootstrap; grants replicate as sync while authoring requires
+  `admin`/owner; the credential/policy split.
+
+### OMS 1.6 — Changed
+
+- §28.4 `delete`: may surface to authorized principals via CAL Tier 2; gains
+  the one-way rule (additions roll back by retraction; erasure is final).
+- §28.9: the "no CAL equivalent — structurally excluded" row now maps to
+  Tier-2 `FORGET`/`PURGE` on hosts that implement them.
+- §8.12 `proposal_cal`: MAY carry Tier-2 statements where the host
+  authorizes destructive proposals (apply recorded not rollbackable);
+  governance statements refused unconditionally.
+
+---
+
 ## [1.5] — 2026-08-03
 
 ### Added
