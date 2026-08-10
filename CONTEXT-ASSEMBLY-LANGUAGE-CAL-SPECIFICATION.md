@@ -551,7 +551,9 @@ verb_list       = verb , { "," , verb } ;
 verb            = "read" | "write" | "supersede" | "delete" | "erase"
                 | "loop.run" | "loop.review" | "loop.apply" | "admin" ;
 ns_scope        = identifier | string_literal | "*" ;
-principal       = identifier , ":" , identifier | string_literal ;
+principal       = string_literal ;   (* e.g. "agent:support-bot" — quoted:
+                                        principal names carry ":" and "-",
+                                        which identifiers do not *)
 
 approve_stmt    = "APPROVE"  , ( hash_literal | parameter ) , reason_clause ;
 reject_stmt     = "REJECT"   , ( hash_literal | parameter ) , reason_clause ;
@@ -1353,9 +1355,9 @@ Grants are stored **in the memory itself** as grant grains (OMS §12.6) --
 they travel, replicate, and are queryable like any other memory.
 
 ```sql
-GRANT read, write ON caller TO agent:support-bot
-GRANT delete ON * TO user:anna WITH because("support rotation")
-REVOKE write ON caller FROM agent:support-bot WITH because("offboarded")
+GRANT read, write ON caller TO "agent:support-bot"
+GRANT delete ON * TO "user:anna" WITH because("support rotation")
+REVOKE write ON caller FROM "agent:support-bot" WITH because("offboarded")
 SHOW GRANTS                          -- every live grant
 SHOW GRANTS FOR agent:support-bot    -- one principal's live grants
 DESCRIBE PRINCIPAL agent:support-bot -- effective verbs per namespace
@@ -2624,7 +2626,7 @@ in the session executes *as* that principal.
   (tokens, passwords, OS identity) to principal *names*; the memory's grant
   grains (OMS §12.6) map principal names to *rights*. Credentials MUST NOT
   be carried in grains, in CAL statements, or in the memory file in any
-  form. A CAL statement can name a principal (`GRANT ... TO agent:x`); it
+  form. A CAL statement can name a principal (`GRANT ... TO "agent:x"`); it
   can never mint, present, or reveal a credential.
 - **The boundary rule.** Anything that needs a filesystem path, a
   credential, or a process to exist is a host operation; everything that
