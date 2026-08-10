@@ -1,7 +1,14 @@
-# CAL (Context Assembly Language) Specification v1.2
+# CAL (Context Assembly Language) Specification v1.3
 
-**Status:** Standards Track | **Date:** 2026-08-03 | **Version:** 1.2 | **Classification:** Experimental
-**Part of:** [Open Memory Specification (OMS) v1.5](./SPECIFICATION.md)
+**Status:** Draft for Comment (CAL 1.3 RFC) | **Date:** 2026-08-10 | **Version:** 1.3-draft | **Classification:** Experimental
+**Part of:** [Open Memory Specification (OMS) v1.6 draft](./SPECIFICATION.md)
+
+> **Draft status.** Version 1.3 restates the safety pillar — from "non-destructive
+> by grammar" to **append-only by construction for evolution, authorization-gated
+> for destruction** — and adds the Tier 2 (Destroy) and Tier 3 (Control) statement
+> families. Every CAL 1.0–1.2 document remains valid, and a session without grants
+> is exactly the language 1.0–1.2 specified. Sections changed by this draft are
+> normative only upon release.
 ---
 
 ## Table of Contents
@@ -47,7 +54,7 @@
 
 The **Context Assembly Language (CAL)** is a companion specification to the Open Memory Specification (OMS). It defines a non-destructive, deterministic, LLM-native language for **assembling agent context from persistent memory**.
 
-CAL allows AI agents to **recall** memory, **assemble** context windows from multiple memory sources with budget constraints, and **evolve** memory -- but never **destroy** it. Every write is append-only and fully revertible. The core safety guarantee -- that CAL cannot destroy data -- is enforced at the grammar level and is a structural impossibility, not a policy check.
+CAL allows AI agents to **recall** memory, **assemble** context windows from multiple memory sources with budget constraints, **evolve** memory append-only, and -- for principals explicitly granted the capability -- **destroy** whole grains (tombstone or bulk erasure) and **control** who may do which of those. The core safety guarantee is two-part: *history cannot be rewritten* (structural -- no statement mutates a stored blob, no destruction takes a predicate), and *destruction and control execute only for an authorized principal* (Tier 2/3, fail-closed). A session without grants is exactly the non-destructive CAL that versions 1.0--1.2 specified -- that language is the floor of every conforming implementation, not its ceiling.
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in RFC 2119.
 
@@ -93,9 +100,10 @@ Key capabilities:
 
 ### 1.3 What CAL Is NOT
 
-- **Not SQL.** No tables, no joins, no DDL, no transactions.
+- **Not SQL.** No tables, no joins, no transactions. (Since 1.3, CAL does have a DCL -- `GRANT`/`REVOKE` -- the way SQL has since SQL-89.)
 - **Not Turing-complete.** No loops, no recursion, no persistent variables.
-- **Not a destructive language.** CAL cannot forget, erase, delete, or destroy grains. CAL cannot touch encryption keys, policies, or consent records. This is the core safety guarantee.
+- **Not an unguarded destructive language.** Destruction exists only as Tier 2: a tombstone of one grain by content address, or bulk erasure by identity or age -- never by predicate, and only for a principal granted `delete`/`erase`. CAL can never rewrite history: no statement mutates a stored blob. CAL cannot touch encryption keys or credentials -- ever, at any tier.
+- **Not an authentication or key-management system.** The host proves who a principal is, custodies keys, and transports files; CAL governs what an authenticated principal may do inside a memory.
 - **Not a transport protocol.** CAL defines a language. Transport (HTTP, gRPC, MCP, etc.) is implementation-specific.
 - **Not a rendering engine.** CAL's FORMAT clause specifies *semantic structure*, not pixel-level presentation. The agent or UI decides how to render.
 - **Not a storage mirror.** CAL output is a *projection* optimized for LLM consumption, not a serialization of the underlying OMS grain structure. Hashes, namespaces, and internal metadata stay in the machine envelope.
@@ -111,14 +119,15 @@ CAL's safety model maps directly to git:
 | `git add` + `git commit` (new file) | `ADD` | No (append-only) | Yes (Tier 1) |
 | `git commit` (amend existing) | `SUPERSEDE` | No (append-only) | Yes (Tier 1) |
 | `git revert` | `REVERT` | No (creates new commit) | Yes (Tier 1) |
-| `git reset --hard` | Store-level `delete` | **Yes** (destroys data) | **No** |
+| `git reset --hard` | -- (rewrites history) | **Yes** | **No -- structurally impossible** |
+| Repo deletion under admin rights | `FORGET` / `PURGE` | **Yes** (whole grains, one-way) | Tier 2 (authorization-gated) |
 | `git push --force` | Crypto-erasure | **Yes** (destroys keys) | **No** |
 
-The line between Tier 0/1 (in CAL) and Tier 2 (not in CAL) is: **can the operation be undone by another append-only operation?** If yes, it is safe for CAL. If no, it stays out.
+The line between the append-only tiers (0/1) and Tier 2 is: **can the operation be undone by another append-only operation?** If yes, it needs no special authority. If no -- a tombstone or an erasure -- it executes only for a principal explicitly granted it, it writes an audit Observation, and it is final: destruction takes a hash, an identity, or an age, never a predicate, and there is no un-forget. Key destruction stays out of the language entirely.
 
 ### 1.5 Relationship to OMS
 
-CAL operates on the 12 grain types defined by OMS v1.5: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill, Recommendation. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
+CAL operates on the 12 grain types defined by OMS v1.6: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill, Recommendation. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
 
 CAL extends the Store Protocol Convention defined in OMS §28.4 ([SPECIFICATION.md](./SPECIFICATION.md)) with a formal query language. Where OMS defines the `query`, `search`, and `supersede` store operations, CAL provides a structured, deterministic syntax for invoking them safely.
 
@@ -128,31 +137,38 @@ CAL extends the Store Protocol Convention defined in OMS §28.4 ([SPECIFICATION.
 
 ### 2.1 The Core Guarantee
 
-> **CAL cannot destroy data. This is not a policy check. It is a structural impossibility.**
+> **CAL cannot rewrite history. This is not a policy check. It is a structural impossibility.**
 >
-> CAL *can* evolve data -- by creating new grains that supersede old ones. But the old grains survive. Every evolution is traceable and revertible. Nothing is ever deleted.
+> CAL *can* evolve data -- by creating new grains that supersede old ones; the old grains survive, and every evolution is traceable and revertible. Since 1.3, CAL *can also* destroy whole grains -- a tombstone by content address, or bulk erasure by identity or age -- but **only** for a principal explicitly granted that verb, only with an audit Observation written, and only in a shape the grammar bounds: **a hash, an identity, or an age -- never a predicate, and never a key.** For any session without such grants, CAL is exactly the non-destructive language of versions 1.0--1.2.
 
 The guarantee is enforced at three reinforcing levels:
 
 | Level | Mechanism | What It Prevents |
 |-------|-----------|-----------------|
-| **Grammar** | The EBNF grammar has no production rules for destructive operations | Parser cannot produce destructive AST nodes |
-| **Type System** | `CalStatement` is a closed enum with exactly 12 variants: `Recall`, `Assemble`, `SetOp`, `Exists`, `History`, `Explain`, `Describe`, `Batch`, `Add`, `Supersede`, `Revert`, `Coalesce`. | No code path from AST to any destructive method |
-| **API Surface** | CAL executor receives a constrained facade, not the full store | Destructive methods (delete, key destruction) are structurally inaccessible |
+| **Grammar** | No production mutates a stored blob; no destruction production accepts a predicate (`FORGET WHERE` does not parse); no key/credential vocabulary exists | Parser cannot produce a history-rewriting or predicate-destruction AST node |
+| **Type System** | `CalStatement` is a closed, per-tier statement set (§8). Destruction variants exist only in the Tier 2 family; adding any other destructive variant requires modifying this specification | No code path from a read/evolve AST to any destructive method |
+| **Authorization + API Surface** | The executor receives a constrained facade; destructive facade methods execute only after the session principal's grants (OMS §12.6) allow the statement's verb; key management is never on the facade | Destruction without an authorized principal is refused fail-closed; key destruction is structurally inaccessible |
 
-### 2.2 Three-Tier Capability Model
+### 2.2 Four-Tier Capability Model
 
-| Tier | Name | What It Can Do | How It Is Enforced |
-|------|------|---------------|-------------------|
-| **Tier 0** | Read (default) | Query, count, explain, assemble, describe, batch. Cannot modify anything. | Grammar + type system. Default for all CAL sessions. |
-| **Tier 1** | Evolve (opt-in) | Add new grains, supersede existing grains, revert supersessions, view history. Append-only; never deletes. | Separate grammar extension, explicit server opt-in, separate capability token with write quotas. |
-| **Tier 2** | Lifecycle | Erasure, key rotation, policy changes, consent management. | **Does not exist in CAL.** No grammar, no AST, no parser extension, no config flag. Only available through implementation-specific APIs (REST, gRPC, CLI, etc.). |
+| Tier | Name | What It Can Do | Gate |
+|------|------|---------------|------|
+| **0** | Core (default) | Query, count, explain, assemble, describe, batch. Cannot modify anything. | None. Default for all CAL sessions. |
+| **1** | Evolve (opt-in) | Add new grains, supersede, revert, view history. Append-only; never deletes. | Server opt-in; `write`/`supersede` verbs where Tier 3 is implemented, capability token with write quotas otherwise. |
+| **2** | Destroy | `FORGET <hash>`, `FORGET SUBJECT`, `PURGE OLDER THAN`. Whole-grain tombstone and bulk erasure -- one-way, audited. | `delete`/`erase` verbs. Requires *an* authorization model: host-defined authorization suffices (Tier 2 without Tier 3 is legal). A host with no authorization model MUST refuse Tier 2. |
+| **3** | Control | `GRANT`/`REVOKE` (DCL), the governance lifecycle (`APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP`), principal-bound sessions. | `admin` and `loop.*` verbs; implies the grant model (OMS §12.6) that Tier 2 consumes. |
 
-### 2.3 Formal Safety Proofs
+**Tiers gate operations, not portability.** Interoperability rides the `.mg` file and Tier-0 reads: any Core implementation can read any memory. A read-only implementation declares Tier 0 and remains fully conformant forever -- nothing in Tier 2/3 is required of it. Hosts declare their tiers, and `DESCRIBE capabilities` MUST report them, so an agent (or a test suite) learns what it may attempt before attempting it.
 
-**"CAL cannot delete data because..."** The `CalStatement` enum has 12 variants. The executor's `match` is exhaustive (compiler-verified in statically typed languages). None invoke a delete or forget operation. Adding a delete variant requires modifying the specification.
+### 2.3 Formal Safety Claims
 
-**"CAL cannot trigger erasure because..."** Erasure requires access to key management or store-level delete operations. The CAL executor facade exposes only: `recall()`, `count()`, `exists()`, `add()`, `supersede()`, `revert()`, `get_history()`, `assemble()`, `describe()`. No key management or delete methods are accessible.
+**"CAL cannot rewrite history because..."** No statement mutates a stored blob. `SUPERSEDE` and `REVERT` create new grains and update index-layer fields only; `FORGET` tombstones a whole grain (the store's compliance `delete`, OMS §28.4) and is **one-way** -- there is no `UNFORGET`, and a host MUST NOT provide an un-tombstone mechanism. Additions roll back by *retraction* (a supersession with `invalidation_type: "retraction"`); tombstones and erasure are final.
+
+**"CAL destruction cannot happen without an authorized principal because..."** Every Tier-2 statement executes only after the session principal's grants allow its verb (`delete` for `FORGET <hash>`, `erase` for `FORGET SUBJECT`/`PURGE`). Sessions without grants are Tier 0/1. Enforcement is fail-closed: an unknown principal, an absent grant, or a host without an authorization model all refuse. Every Tier-2 execution writes an audit Observation grain (§8.14.4).
+
+**"CAL cannot destroy by predicate because..."** The destruction grammar accepts exactly three target shapes: a content address, a subject identity, or an age window. There is no production for `FORGET WHERE` or any filter-driven deletion, so a single statement's blast radius is always explicit in its text.
+
+**"CAL cannot trigger key destruction because..."** Crypto-erasure requires key management, and no key vocabulary exists in the grammar (§2.4) and no key method exists on the executor facade. Keys and credentials are host objects at every tier.
 
 **"CAL ADD cannot destroy data because..."** ADD creates a new grain via the OMS store `put` operation (OMS §28.4). It does not modify or reference any existing grain. The grain count increases by one.
 
@@ -166,19 +182,21 @@ The guarantee is enforced at three reinforcing levels:
 
 ### 2.4 Grammar-Level Exclusions
 
-The following tokens do **not exist** in CAL's lexer or grammar:
+The following tokens do **not exist** in CAL's lexer or grammar, at any tier:
 
 ```
-DELETE, DROP, FORGET, ERASE, DESTROY, PURGE, TRUNCATE,    -- Destructive
+DELETE, DROP, ERASE, DESTROY, TRUNCATE,                     -- Predicate/unbounded destruction
 INSERT, CREATE, WRITE, STORE,                               -- Unconstrained creation
-KEY, ENCRYPT, DECRYPT, ROTATE, MASTER, DEK, SECRET,        -- Key management
-POLICY, SEAL, UNSEAL, GRANT, REVOKE, CONSENT, RESTRICT,    -- Policy/auth
+KEY, ENCRYPT, DECRYPT, ROTATE, MASTER, DEK, SECRET, TOKEN,  -- Key/credential management
+POLICY, SEAL, UNSEAL, CONSENT, RESTRICT,                    -- Sealed policy / consent records
 SCHEMA, PARTITION, INDEX, MIGRATION                         -- Schema
 ```
 
-If these appear in a query, they are parse errors, not recognized keywords.
+If these appear in a query, they are parse errors, not recognized keywords. This list is permanent: no future tier unblocks it. (`POLICY` here means the sealed policy and loop-policy *writes*; the read-only `DESCRIBE policy` target is an identifier, not this keyword.)
 
-Note: `ADD`, `SUPERSEDE`, `REVERT`, `SET`, and `REASON` are Tier 1 keywords. The **parser** always recognizes them (so that `EXPLAIN ADD ...` works as a dry-run even when Tier 1 execution is disabled). However, the **executor** rejects non-EXPLAIN Tier 1 statements when Tier 1 is disabled, returning `CAL-E044: Tier1NotEnabled`. This two-layer approach ensures `EXPLAIN` can always preview evolve operations without risk.
+**Changed in 1.3:** `FORGET` and `PURGE` moved from this list to the Tier 2 keyword set, and `GRANT`/`REVOKE` to the Tier 3 keyword set (§3.2). The block on them existed to force a specification-level decision before any destructive or control surface entered the language -- this revision is that decision, and the statements it admits are bounded by §2.1--§2.3.
+
+Note: Tier 1/2/3 keywords are always **parsed** (so `EXPLAIN FORGET ...` works as a dry-run even where execution is unavailable). The **executor** rejects non-EXPLAIN statements above the session's effective tier: `CAL-E044: Tier1NotEnabled` for Tier 1, `CAL-E120`/`CAL-E121` for Tier 2/3 (§22). This two-layer approach ensures `EXPLAIN` can always preview an operation without risk.
 
 ---
 
@@ -213,6 +231,19 @@ CAL                                                       -- version prefix
 ```
 ADD, SUPERSEDE, REVERT, SET, REASON
 ```
+
+**Tier 2 (Destroy) keywords (new in 1.3; always parsed; execution requires the `delete`/`erase` verb -- see sections 2.2 and 8.13):**
+```
+FORGET, PURGE, SUBJECT, OLDER, THAN, TYPE, BECAUSE
+```
+
+**Tier 3 (Control) keywords (new in 1.3; always parsed; execution requires the `admin`/`loop.*` verbs -- see sections 8.14 and 8.15):**
+```
+GRANT, REVOKE, ON, TO, SHOW, GRANTS, PRINCIPAL,
+APPROVE, REJECT, APPLY, ROLLBACK, RUN, LOOP, FULL
+```
+
+`BECAUSE` was already an alias of `REASON` in `reason_clause`; Tier 2/3 statements conventionally write `BECAUSE`, and this specification uses that spelling for them throughout. `DEFINE ROLE` is **reserved but not specified** in 1.3 -- role bundles are deferred to a future revision; the 1.3 grant surface is verbs-only.
 
 **Relation category keywords:**
 ```
@@ -286,13 +317,18 @@ extractor       = "SUBJECTS" | "OBJECTS" | "HASHES" ;
 statement       = explain_stmt | recall_stmt | assemble_stmt | set_stmt
                 | exists_stmt | history_stmt | describe_stmt | batch_stmt
                 | coalesce_stmt | define_template_stmt
-                | add_stmt | supersede_stmt | revert_stmt ;
+                | add_stmt | supersede_stmt | revert_stmt
+                | forget_stmt | purge_stmt                        (* Tier 2 *)
+                | grant_stmt | revoke_stmt | show_grants_stmt     (* Tier 3 *)
+                | approve_stmt | reject_stmt | apply_stmt
+                | rollback_stmt | run_loop_stmt ;                 (* Tier 3 *)
 
 (* --- Tier 0: Read --- *)
 
 explain_stmt    = "EXPLAIN" , ( recall_stmt | assemble_stmt | set_stmt
                 | add_stmt | supersede_stmt | revert_stmt | batch_stmt
-                | coalesce_stmt ) ;
+                | coalesce_stmt
+                | forget_stmt | purge_stmt | grant_stmt | revoke_stmt ) ;
 
 set_stmt        = "(" , query , ")" , set_op , "(" , query , ")" ;
 set_op          = "UNION" | "INTERSECT" | "EXCEPT" ;
@@ -320,11 +356,14 @@ history_stmt    = "HISTORY" , ( hash_literal | parameter ) , [ diff_clause ]
 
 describe_stmt   = "DESCRIBE" , describe_target ;
 describe_target = "grain_types" | "fields" , [ grain_type_singular ]
-                | "capabilities" | "server" | "templates" | "grammar" ;
+                | "capabilities" | "server" | "templates" | "grammar"
+                | "PRINCIPAL" , principal                       (* Tier 3 read *)
+                | "loop" | "analyzers" | "outcomes" | "policy" ; (* Tier 3 reads *)
 
 batch_stmt      = "BATCH" , "{" , batch_entry , { "," , batch_entry } , "}" ;
 batch_entry     = label , ":" , ( recall_stmt | exists_stmt | history_stmt
                 | describe_stmt | coalesce_stmt ) ;
+                (* Tier 2/3 statements are NOT batch entries -- see §8.14.3 *)
 
 coalesce_stmt   = "COALESCE" , "(" , recall_stmt , "," , recall_stmt ,
                   { "," , recall_stmt } , ")" ;
@@ -491,6 +530,34 @@ observation_add_field = "observer_id" | "observer_type" ;
 set_clause      = "SET" , evolve_field , "=" , value ;
 evolve_field    = "object" | "confidence" | "importance" | "tags" ;
 reason_clause   = ( "REASON" | "BECAUSE" ) , string_literal ;
+
+(* --- Tier 2: Destroy (new in 1.3) --- *)
+
+forget_stmt     = "FORGET" , ( hash_literal | parameter ) , [ reason_clause ]
+                | "FORGET" , "SUBJECT" , string_literal ,
+                  [ with_clause ] , reason_clause ;
+purge_stmt      = "PURGE" , "OLDER" , "THAN" , duration_literal ,
+                  [ "TYPE" , grain_type_singular ] , reason_clause ;
+duration_literal = digit+ , ( "d" | "h" | "m" ) ;
+
+(* --- Tier 3: Control (new in 1.3) --- *)
+
+grant_stmt      = "GRANT" , verb_list , "ON" , ns_scope , "TO" , principal ,
+                  [ with_clause ] ;
+revoke_stmt     = "REVOKE" , verb_list , "ON" , ns_scope , "FROM" , principal ,
+                  [ with_clause ] ;
+show_grants_stmt = "SHOW" , "GRANTS" , [ "FOR" , principal ] ;
+verb_list       = verb , { "," , verb } ;
+verb            = "read" | "write" | "supersede" | "delete" | "erase"
+                | "loop.run" | "loop.review" | "loop.apply" | "admin" ;
+ns_scope        = identifier | string_literal | "*" ;
+principal       = identifier , ":" , identifier | string_literal ;
+
+approve_stmt    = "APPROVE"  , ( hash_literal | parameter ) , reason_clause ;
+reject_stmt     = "REJECT"   , ( hash_literal | parameter ) , reason_clause ;
+apply_stmt      = "APPLY"    , ( hash_literal | parameter ) , reason_clause ;
+rollback_stmt   = "ROLLBACK" , ( hash_literal | parameter ) , reason_clause ;
+run_loop_stmt   = "RUN" , "LOOP" , [ "FULL" ] , [ with_clause ] ;
 
 (* --- Workflow graph syntax --- *)
 
@@ -864,7 +931,7 @@ The parser SHOULD validate `mg:` prefixed relation values against the known voca
 
 ## 8. Statement Semantics
 
-CAL/1 has **12 statement types** organized into three tiers:
+CAL/1 statements are organized into four tiers (§2.2):
 
 | Statement | Tier | Description |
 |-----------|------|-------------|
@@ -872,14 +939,20 @@ CAL/1 has **12 statement types** organized into three tiers:
 | **ASSEMBLE** | 0 | Compose context from multiple sources with budget |
 | **EXISTS** | 0 | Check grain existence by content address |
 | **HISTORY** | 0 | Version history with AS OF and DIFF |
-| **EXPLAIN** | 0 | Execution plan preview |
-| **DESCRIBE** | 0 | Schema introspection |
+| **EXPLAIN** | 0 | Execution plan preview (any tier's statement, as dry-run) |
+| **DESCRIBE** | 0 | Schema introspection (`PRINCIPAL`/`loop`-family targets read Tier-3 state) |
 | **BATCH** | 0 | Multiple independent queries in one request |
 | **COALESCE** | 0 | Fallback chain of RECALL queries |
+| *Set operations* | 0 | `UNION`, `INTERSECT`, `EXCEPT` |
 | **ADD** | 1 | Create a new grain (append-only) |
 | **SUPERSEDE** | 1 | Create a new version of an existing grain |
 | **REVERT** | 1 | Restore a previous version |
-| *Set operations* | 0 | `UNION`, `INTERSECT`, `EXCEPT` |
+| **FORGET** | 2 | Tombstone one grain by hash, or erase a subject's grains (§8.14) |
+| **PURGE** | 2 | Age-scoped retention erasure (§8.14) |
+| **GRANT / REVOKE** | 3 | Confer or withdraw verbs on a namespace for a principal (§8.15) |
+| **SHOW GRANTS** | 3 (read) | List live grants (§8.15) |
+| **APPROVE / REJECT / APPLY / ROLLBACK** | 3 | Recommendation lifecycle transitions (§8.16) |
+| **RUN LOOP** | 3 | Trigger an analysis pass of the host's improvement engine (§8.16) |
 
 ### 8.1 RECALL (Tier 0)
 
@@ -1209,6 +1282,156 @@ COALESCE(
 ```
 
 **Constraints:** Max 5 branches. All branches MUST be RECALL statements.
+
+### 8.14 FORGET and PURGE (Tier 2 -- new in 1.3)
+
+Destruction of whole grains, in exactly three shapes. Maps to the OMS store's
+compliance `delete` operation (OMS §28.4) and host bulk-erasure operations.
+
+```sql
+FORGET sha256:a1b2c3d4...                                   -- one grain, by address
+FORGET sha256:a1b2c3d4... BECAUSE "user retracted consent"  -- reason optional here, recorded when given
+FORGET SUBJECT "patient-789" BECAUSE "GDPR Art. 17 request" -- every grain referencing an identity
+FORGET SUBJECT "patient-789" WITH text_mentions BECAUSE "…" -- + grains whose indexed text mentions it
+PURGE OLDER THAN 90d BECAUSE "retention policy"             -- age-scoped sweep
+PURGE OLDER THAN 30d TYPE event BECAUSE "transcript TTL"    -- age + one grain type
+```
+
+#### 8.14.1 Semantics
+
+- `FORGET <hash>` tombstones one grain: it leaves the default recall path
+  permanently. Requires the `delete` verb. `BECAUSE` is OPTIONAL on this form
+  (it predates 1.3 in deployed dialects and MUST remain valid without a
+  reason) and MUST be recorded in the audit Observation when given.
+- `FORGET SUBJECT <id>` erases every grain referencing the identity --
+  history included -- per the host's erasure procedure; `WITH text_mentions`
+  extends the scope to grains whose indexed text mentions the identity.
+  Requires the `erase` verb. `BECAUSE` is REQUIRED (parse error without).
+- `PURGE OLDER THAN <duration> [TYPE <t>]` erases grains older than the
+  window, optionally limited to one grain type. Requires the `erase` verb.
+  `BECAUSE` is REQUIRED.
+- All three are **one-way** (§2.3): there is no `UNFORGET`, and a host MUST
+  NOT offer an un-tombstone or un-erase mechanism through any interface.
+- An erasure execution SHOULD produce the host's erasure report; the audit
+  Observation (§8.14.4) references it.
+
+#### 8.14.2 Authorization
+
+Tier-2 statements execute only when the session principal (§18.4) holds the
+required verb for the target namespace, resolved from the memory's own grant
+grains (OMS §12.6) or, on a Tier-2-without-Tier-3 host, from the host's
+authorization model. Enforcement is fail-closed: no principal, no grants, or
+no authorization model at all → `CAL-E120`/`CAL-E121`, nothing executes.
+A host session designated *owner* (OMS §12.6.4) is exempt from grant lookup.
+
+#### 8.14.3 Context restrictions
+
+Tier-2 and Tier-3 statements MUST be top-level, single statements. They are
+refused inside `BATCH`, inside saved-query bodies, and inside a
+Recommendation's `proposal_cal` **except** that a `proposal_cal` MAY carry
+Tier-2 statements where the host authorizes destructive proposals (OMS
+§8.12); governance statements (§8.16) are refused inside `proposal_cal`
+unconditionally. `EXPLAIN` of any Tier-2/3 statement is always available as
+a dry-run and executes nothing.
+
+#### 8.14.4 The Tier-2 audit Observation
+
+Every Tier-2 execution MUST write one audit Observation grain in the memory
+it acted on, following the audit pattern of OMS §8.12.1: `observer_id` = the
+session principal, `observer_type` from the principal's host record (§18.4),
+the statement's verb and target (hash, subject identity, or age window) and
+the `BECAUSE` reason (where given) carried in the Observation's `object`,
+and `derived_from` referencing the erasure report where one exists. The
+audit grain is ordinary memory: it replicates with the file and is
+`RECALL`-able. A destruction that cannot write its audit Observation MUST
+fail before destroying anything.
+
+### 8.15 GRANT, REVOKE, SHOW GRANTS (Tier 3 -- new in 1.3)
+
+The control plane: confer or withdraw verbs on a namespace for a principal.
+Grants are stored **in the memory itself** as grant grains (OMS §12.6) --
+they travel, replicate, and are queryable like any other memory.
+
+```sql
+GRANT read, write ON caller TO agent:support-bot
+GRANT delete ON * TO user:anna WITH because("support rotation")
+REVOKE write ON caller FROM agent:support-bot WITH because("offboarded")
+SHOW GRANTS                          -- every live grant
+SHOW GRANTS FOR agent:support-bot    -- one principal's live grants
+DESCRIBE PRINCIPAL agent:support-bot -- effective verbs per namespace
+```
+
+#### 8.15.1 Semantics
+
+- **Verbs:** `read`, `write`, `supersede`, `delete`, `erase`, `loop.run`,
+  `loop.review`, `loop.apply`, `admin`. The verb set is closed in 1.3.
+- **Scope:** one namespace or `*`. The memory axis is implicit -- a grant
+  governs the memory it is stored in, never another memory.
+- **Principals** are opaque names (`user:anna`, `agent:support-bot`).
+  Identity *binding* -- proving a caller is that principal -- is the host's
+  job (§18.4); CAL never sees or carries credentials.
+- `GRANT` writes a grant grain (OMS §12.6.2). `REVOKE` retracts the covering
+  grant grain(s) by supersession -- a full revoke retracts, a partial revoke
+  supersedes with the reduced grant -- so grant history is append-only and
+  nothing is deleted. GRANT/REVOKE are therefore **Tier-1-shaped writes
+  gated by Tier-3 authority**, not destructive operations.
+- **Who may GRANT:** a principal holding `admin` (on the target namespace),
+  or the owner session. Every `erase` grant is explicit -- if a future
+  revision defines role bundles, no bundle may include `erase`.
+  There is no `WITH GRANT OPTION`.
+- `SHOW GRANTS` is a read (sugar over `RECALL` of the PERMISSION relation
+  category); it requires only `read` on the authz namespace.
+
+#### 8.15.2 Fail-closed resolution
+
+A session principal's effective rights are the union of live (unsuperseded)
+grant grains naming it, intersected with the statement's target namespace.
+Unknown principal or empty result → Tier 0/1 only. A memory containing no
+grant grains confers nothing on anyone except the owner session.
+
+### 8.16 Governance statements (Tier 3 -- new in 1.3)
+
+The Recommendation lifecycle (OMS §8.12), expressible in the language whose
+data it governs.
+
+```sql
+RUN LOOP                                      -- incremental analysis pass
+RUN LOOP FULL WITH min_new(3), if_stale("6h") -- full sweep, gated
+APPROVE sha256:9c41... BECAUSE "matches our deploy policy"
+REJECT  sha256:9c41... BECAUSE "false positive - seasonal"
+APPLY   sha256:9c41... BECAUSE "approved in standup"
+ROLLBACK sha256:9c41... BECAUSE "regressed at the 30-day checkpoint"
+DESCRIBE loop        -- engine health   (read)
+DESCRIBE analyzers   -- registered analyzers (read)
+DESCRIBE outcomes    -- the Verify gate's measurements (read)
+DESCRIBE policy      -- the effective host policy (read)
+```
+
+#### 8.16.1 Semantics and gates
+
+- `BECAUSE` is REQUIRED on every lifecycle transition -- a missing reason is
+  a **parse error**, and hosts MUST additionally validate it non-empty at
+  execution. The reason lands in the transition's audit Observation
+  (OMS §8.12.1).
+- Verb mapping: `RUN LOOP` requires `loop.run`; `APPROVE`/`REJECT` require
+  `loop.review`; `APPLY`/`ROLLBACK` require `loop.apply`; a destructive
+  apply additionally requires the `delete`/`erase` verb its proposal needs
+  (two-key property).
+- **Self-approval MUST be refused** against the recommendation's creating
+  actor and, for a recommendation of LLM or external-command origin, against
+  the principal that triggered the run that authored it.
+- **Observer type MUST derive from the session principal's host record**
+  (§18.4) -- never from statement text. A statement cannot claim to be
+  human.
+- `RUN LOOP` carries no credentials and no model configuration -- analysis
+  backends are host-configured. `WITH` options are limited to gating knobs
+  (e.g. `min_new(n)`, `if_stale("6h")`).
+- Loop *policy* writes (auto-apply grants, analyzer deny-lists) are
+  permanently outside CAL: the policy is what gates these statements, and a
+  language able to edit its own gate would be self-licensing.
+- Governance statements are refused inside `BATCH`, saved-query bodies, and
+  `proposal_cal` (§8.14.3) -- no one-round-trip approve-and-apply macro, and
+  no recommendation whose payload approves other recommendations.
 
 ---
 
@@ -2391,6 +2614,35 @@ CAL String (ADD, SUPERSEDE, or REVERT)
 
 The namespace is ALWAYS taken from the token, never from the query. Implementations MUST overwrite any namespace specified in the CAL string with the token's namespace.
 
+### 18.4 Principal-Bound Sessions (Tier 2/3 -- new in 1.3)
+
+Tier-2 and Tier-3 execution requires a **principal-bound session**: the host
+authenticates a caller, resolves it to a principal name, and every statement
+in the session executes *as* that principal.
+
+- **The credential/policy split.** The host's credential store maps secrets
+  (tokens, passwords, OS identity) to principal *names*; the memory's grant
+  grains (OMS §12.6) map principal names to *rights*. Credentials MUST NOT
+  be carried in grains, in CAL statements, or in the memory file in any
+  form. A CAL statement can name a principal (`GRANT ... TO agent:x`); it
+  can never mint, present, or reveal a credential.
+- **The boundary rule.** Anything that needs a filesystem path, a
+  credential, or a process to exist is a host operation; everything that
+  acts on grains in an open memory is CAL. Hosts MUST NOT extend CAL past
+  this boundary.
+- **Observer class.** Each principal's host record carries its observer
+  class (`human` or an agent class per OMS §24); audit grains take
+  `observer_type` from that record, never from statement text.
+- **Owner sessions.** A host MAY designate a local session as *owner* (OMS
+  §12.6.4) -- the implicit superuser of the memory it opens, exempt from
+  grant lookup. This preserves the single-operator experience: a memory
+  with no grant grains is fully usable by its owner and confers nothing on
+  anyone else.
+- **Fail-closed.** An unauthenticated or unknown caller where a credential
+  map is configured resolves to an anonymous principal with at most `read`;
+  where no authorization model exists at all, Tier 2/3 statements MUST be
+  refused (`CAL-E120`).
+
 ---
 
 ## 19. Policy Integration
@@ -2411,7 +2663,7 @@ CAL queries execute through the same read path as all other interfaces. No CAL s
 
 - **Art. 15 (Right of Access):** CAL enables DSAR via `RECALL WHERE user_id = "alice" COUNT`
 - **Art. 16 (Right to Rectification):** CAL SUPERSEDE enables correction of inaccurate personal data.
-- **Art. 17 (Right to Erasure):** Excluded at grammar level. Erasure only via implementation-specific APIs.
+- **Art. 17 (Right to Erasure):** Expressible in-language since 1.3 -- `FORGET SUBJECT <id> BECAUSE "..."` (Tier 2, `erase` verb, audited, one-way; §8.14). Hosts without Tier 2 continue to serve erasure via implementation-specific APIs.
 - **Art. 20 (Data Portability):** CAL can serve as query interface for exports.
 - **Art. 25 (By Design):** Grammar-level safety qualifies as "by design" protection.
 
@@ -2496,6 +2748,24 @@ Every CAL execution MUST produce an audit entry.
 | `tier` | integer | 1 |
 | `duration_ms` | integer | Execution time |
 
+**Tier 2 (Destroy) and Tier 3 (Control) -- new in 1.3:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `query_hash` | string | SHA-256 of normalized CAL string |
+| `namespace` | string | Effective namespace |
+| `principal` | string | The session principal (§18.4) -- not pseudonymized; accountability requires the real name |
+| `operation` | string | `"forget"`, `"forget_subject"`, `"purge"`, `"grant"`, `"revoke"`, `"approve"`, `"reject"`, `"apply"`, `"rollback"`, `"run_loop"` |
+| `target` | string | Hash, subject identity, age window, or `principal/verbs/ns` for DCL |
+| `reason` | string? | The `BECAUSE` text (absent only on bare `FORGET <hash>`) |
+| `audit_grain` | string | Content address of the in-memory audit Observation (§8.14.4, OMS §8.12.1) |
+| `tier` | integer | 2 or 3 |
+| `duration_ms` | integer | Execution time |
+
+Unlike Tier 0/1 audit entries -- host-side logs -- Tier 2/3 executions
+additionally write their audit **into the memory itself** as an Observation
+grain (§8.14.4, §8.16.1), so accountability replicates with the file.
+
 **Streaming audit fields (additional):**
 
 | Field | Type | Description |
@@ -2544,6 +2814,7 @@ See [Appendix C](#appendix-c-error-code-registry) for the complete registry. Err
 | CAL-E085 -- CAL-E096 | Template | 12 |
 | CAL-E100 | Version | 1 |
 | CAL-E110, CAL-E113 | Multi-Format | 2 |
+| CAL-E120 -- CAL-E125 | Authorization (Tier 2/3, new in 1.3) | 6 |
 
 ### 22.3 Warning Codes
 
@@ -2643,10 +2914,30 @@ Everything in Evolve, plus:
 - `DESCRIBE templates`
 - WebSocket transport for streaming
 
-Implementations MUST declare conformance:
+### Tier modules (MAY implement -- new in 1.3)
+
+Orthogonal to Levels 1--4, the Tier 2/3 statement families are optional
+**modules**. Implementing one means implementing it whole:
+
+- **Destroy (Tier 2):** `FORGET <hash>`, `FORGET SUBJECT`, `PURGE OLDER
+  THAN`; an authorization model (host-defined suffices); the audit
+  Observation (§8.14.4); error codes CAL-E120--E125. Tier 2 without Tier 3
+  is legal.
+- **Control (Tier 3):** `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL`
+  over in-memory grant grains (OMS §12.6); principal-bound sessions
+  (§18.4); the governance statements (§8.16) where the host has a
+  recommendation engine. Implies the grant model Tier 2 consumes.
+
+A Tier-0/1 implementation is not diminished by declining both modules --
+**tiers gate operations, not portability** (§2.2), and conformance claims
+are per-tier.
+
+Implementations MUST declare conformance, including their tiers:
 ```json
-{"cal_conformance": "extended", "cal_version": "1.0"}
+{"cal_conformance": "extended", "cal_version": "1.3", "cal_tiers": [0, 1]}
 ```
+
+`DESCRIBE capabilities` MUST report the same tier list.
 
 ---
 
@@ -2871,6 +3162,17 @@ All error codes use the `CAL-E` prefix.
 | CAL-E110 | Too many formats in multi-format list (maximum 5) |
 | CAL-E113 | Duplicate format key in multi-format list (alias or canonical name collision) |
 
+### Authorization Errors (CAL-E120 -- CAL-E125, new in 1.3)
+
+| Code | Description |
+|------|-------------|
+| CAL-E120 | TierNotSupported — the host does not implement this statement's tier (or has no authorization model for Tier 2/3) |
+| CAL-E121 | NotAuthorized — the session principal lacks the statement's verb on the target namespace. The message SHOULD name the missing verb, the resource, and the `GRANT` statement that would confer it |
+| CAL-E122 | UnknownPrincipal — the named or session principal does not resolve |
+| CAL-E123 | SelfApproval — the reviewing principal created, or triggered the run that authored, this recommendation |
+| CAL-E124 | ContextRefused — Tier 2/3 statement inside `BATCH`, a saved-query body, or `proposal_cal` where forbidden (§8.14.3) |
+| CAL-E125 | ReasonRequired — a required `BECAUSE` reason is missing or empty at execution |
+
 ### Shortcut and Grain Type Errors (CAL-E060 -- CAL-E066)
 
 | Code | Description |
@@ -2959,7 +3261,10 @@ EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE,
 ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, AS,
 FOR, FROM, BUDGET, PRIORITY, FORMAT,
 LET, THREAD, DIFF,
-ADD, SUPERSEDE, REVERT, SET, REASON,
+ADD, SUPERSEDE, REVERT, SET, REASON, BECAUSE,
+FORGET, PURGE, SUBJECT, OLDER, THAN, TYPE,
+GRANT, REVOKE, ON, TO, SHOW, GRANTS, PRINCIPAL,
+APPROVE, REJECT, APPLY, ROLLBACK, RUN, LOOP, FULL,
 STREAM, TEMPLATE, DEFINE, UNDEFINE, EXTENDS,
 HEADER, ELEMENT, ELEMENT_SUMMARY, ELEMENT_OMIT, SOURCE_BREAK, FOOTER,
 PREFERENCE, KNOWLEDGE, PERMISSION, INTERACTION, AGENCY, LIFECYCLE, OBSERVATION,
@@ -2976,7 +3281,8 @@ DIVERSITY, MMR, THRESHOLD, RERANK, PROVENANCE,
 SUPERSEDED, EXPLANATION, SCORE_BREAKDOWN,
 CONSISTENCY, EVENTUAL, BOUNDED, LINEARIZABLE,
 CACHE, PIN, UNPIN, MERGE, LANG,
-CHUNK, PAUSE, RESUME, CANCEL
+CHUNK, PAUSE, RESUME, CANCEL,
+ROLE                                        -- DEFINE ROLE, deferred (§3.2)
 ```
 
 ---
@@ -3076,14 +3382,15 @@ CHUNK, PAUSE, RESUME, CANCEL
 
 | Version | Date | Change |
 |---------|------|--------|
+| 1.3-draft | 2026-08-10 | **The pillar changes, on purpose and in the open.** 1.0--1.2 promised "non-destructive by grammar; no unsafe mode." The promise was true and had a hidden cost: real deployments still needed erasure -- GDPR, retention -- so destruction happened anyway, outside the language, ungoverned by any spec. Exiling destruction never prevented it; it only prevented *specifying* it. 1.3 brings it inside, where grammar bounds its shape (whole grains by hash, identity, or age -- never a predicate, never a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and the audit trail sees it (a mandatory in-memory audit Observation per Tier-2 execution). Adds the four-tier model (Core/Evolve/Destroy/Control; tiers gate operations, not portability -- §2.2), Tier 2 statements `FORGET <hash>`/`FORGET SUBJECT`/`PURGE OLDER THAN` (§8.14), Tier 3 DCL `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL` over in-memory grant grains (§8.15, OMS §12.6), Tier 3 governance statements `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP` + `DESCRIBE loop`-family (§8.16), principal-bound sessions and the credential/policy split (§18.4), authorization error codes CAL-E120--E125, and the `cal_tiers` conformance declaration. `DEFINE ROLE` reserved, deferred. Every 1.0--1.2 document remains valid Tier-0/1 CAL; a session without grants is exactly the language those releases promised -- the floor, not the ceiling. |
 | 1.2 | 2026-08-03 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Also adds the **`ELEMENT` shorthand** for custom templates (Section 10.6.1): `DEFINE TEMPLATE <name> AS "<text>"` and `FORMAT TEMPLATE "<text>"`, both defined by equivalence to an `ELEMENT` section, plus the `template_shorthand` production and `"TEMPLATE" , string_literal` in `format_spec`. This also corrects two 1.1 defects in the same examples (Sections 10.1.1, 14.2.1, 27): the `TEMPLATE "..."` form they use was not admitted by the Section 4 grammar, and they interpolated bare `{{subject}}`/`{{object}}` rather than the `grain.` namespace that Section 10.5 defines and Section 10.8 closes. Backward-compatible. |
 | 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. As part of the OMS v1.4 release, also adds the Skill grain type (`0x0B`) to the closed query set (`RECALL skills` / `ADD skill`, type-specific field set, `<skill>` projection, TOON columns, `mg:capable_of` in the `AGENCY` shortcut) and corrects `belief`/`action` literals the rename left behind (`grain_type_plural`, `RECALL MY`, TOON tables, `DESCRIBE` listing, `CAL-E051`). |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
 
 ---
 
-**Document Status:** This is the CAL (Context Assembly Language) Specification v1.2. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.5 — see [SPECIFICATION.md](./SPECIFICATION.md).
+**Document Status:** This is the CAL (Context Assembly Language) Specification v1.3, **draft for comment**. It defines a deterministic, LLM-native context assembly, evolution, destruction, and control language for OMS-compliant memory databases — append-only by construction for evolution, authorization-gated for destruction and control. CAL is part of the Open Memory Specification (OMS) v1.6 draft — see [SPECIFICATION.md](./SPECIFICATION.md).
 
-**Last Updated:** 2026-08-03
+**Last Updated:** 2026-08-10
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
 **Copyright:** Public Domain (CC0 1.0 Universal)
