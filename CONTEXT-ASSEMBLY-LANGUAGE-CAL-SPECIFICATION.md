@@ -3067,8 +3067,12 @@ It can read, assemble, and evolve memories, but never delete them.
 
 ### Rules:
 - LIMIT is always enforced (default 20, max 1000)
-- CAL cannot delete, erase, forget, or destroy data.
-- REASON is mandatory for all evolve operations.
+- CAL cannot rewrite history. Assume you cannot delete, erase, forget, or
+  destroy data: destruction and GRANT/APPROVE-class statements execute only
+  for sessions explicitly granted them -- check DESCRIBE capabilities before
+  attempting any, and expect CAL-E120/E121 refusals otherwise.
+- REASON is mandatory for all evolve operations; BECAUSE is mandatory for
+  governance and bulk-erasure statements.
 - Use HISTORY to check current version before SUPERSEDE.
 ```
 
