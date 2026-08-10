@@ -55,7 +55,7 @@ dangerous operations off the books.
   hosts authenticate and resolve principals; grants resolve from the
   memory; credentials never enter grains or statements; owner sessions
   preserve the single-operator experience.
-- **Authorization error codes** CAL-E120–E125, with CAL-E121 messages
+- **Authorization error codes** CAL-E121–E126, with CAL-E121 messages
   naming the missing verb and the `GRANT` that would confer it.
 
 #### CAL 1.3 — Changed

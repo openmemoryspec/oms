@@ -196,7 +196,7 @@ If these appear in a query, they are parse errors, not recognized keywords. This
 
 **Changed in 1.3:** `FORGET` and `PURGE` moved from this list to the Tier 2 keyword set, and `GRANT`/`REVOKE` to the Tier 3 keyword set (§3.2). The block on them existed to force a specification-level decision before any destructive or control surface entered the language -- this revision is that decision, and the statements it admits are bounded by §2.1--§2.3.
 
-Note: Tier 1/2/3 keywords are always **parsed** (so `EXPLAIN FORGET ...` works as a dry-run even where execution is unavailable). The **executor** rejects non-EXPLAIN statements above the session's effective tier: `CAL-E044: Tier1NotEnabled` for Tier 1, `CAL-E120`/`CAL-E121` for Tier 2/3 (§22). This two-layer approach ensures `EXPLAIN` can always preview an operation without risk.
+Note: Tier 1/2/3 keywords are always **parsed** (so `EXPLAIN FORGET ...` works as a dry-run even where execution is unavailable). The **executor** rejects non-EXPLAIN statements above the session's effective tier: `CAL-E044: Tier1NotEnabled` for Tier 1, `CAL-E121`/`CAL-E122` for Tier 2/3 (§22). This two-layer approach ensures `EXPLAIN` can always preview an operation without risk.
 
 ---
 
@@ -1321,7 +1321,7 @@ Tier-2 statements execute only when the session principal (§18.4) holds the
 required verb for the target namespace, resolved from the memory's own grant
 grains (OMS §12.6) or, on a Tier-2-without-Tier-3 host, from the host's
 authorization model. Enforcement is fail-closed: no principal, no grants, or
-no authorization model at all → `CAL-E120`/`CAL-E121`, nothing executes.
+no authorization model at all → `CAL-E121`/`CAL-E122`, nothing executes.
 A host session designated *owner* (OMS §12.6.4) is exempt from grant lookup.
 
 #### 8.14.3 Context restrictions
@@ -2641,7 +2641,7 @@ in the session executes *as* that principal.
 - **Fail-closed.** An unauthenticated or unknown caller where a credential
   map is configured resolves to an anonymous principal with at most `read`;
   where no authorization model exists at all, Tier 2/3 statements MUST be
-  refused (`CAL-E120`).
+  refused (`CAL-E122`).
 
 ---
 
@@ -2814,7 +2814,7 @@ See [Appendix C](#appendix-c-error-code-registry) for the complete registry. Err
 | CAL-E085 -- CAL-E096 | Template | 12 |
 | CAL-E100 | Version | 1 |
 | CAL-E110, CAL-E113 | Multi-Format | 2 |
-| CAL-E120 -- CAL-E125 | Authorization (Tier 2/3, new in 1.3) | 6 |
+| CAL-E121 -- CAL-E126 | Authorization (Tier 2/3, new in 1.3) | 6 |
 
 ### 22.3 Warning Codes
 
@@ -2921,7 +2921,7 @@ Orthogonal to Levels 1--4, the Tier 2/3 statement families are optional
 
 - **Destroy (Tier 2):** `FORGET <hash>`, `FORGET SUBJECT`, `PURGE OLDER
   THAN`; an authorization model (host-defined suffices); the audit
-  Observation (§8.14.4); error codes CAL-E120--E125. Tier 2 without Tier 3
+  Observation (§8.14.4); error codes CAL-E121--E126. Tier 2 without Tier 3
   is legal.
 - **Control (Tier 3):** `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL`
   over in-memory grant grains (OMS §12.6); principal-bound sessions
@@ -3070,7 +3070,7 @@ It can read, assemble, and evolve memories, but never delete them.
 - CAL cannot rewrite history. Assume you cannot delete, erase, forget, or
   destroy data: destruction and GRANT/APPROVE-class statements execute only
   for sessions explicitly granted them -- check DESCRIBE capabilities before
-  attempting any, and expect CAL-E120/E121 refusals otherwise.
+  attempting any, and expect CAL-E121/E122 refusals otherwise.
 - REASON is mandatory for all evolve operations; BECAUSE is mandatory for
   governance and bulk-erasure statements.
 - Use HISTORY to check current version before SUPERSEDE.
@@ -3166,16 +3166,21 @@ All error codes use the `CAL-E` prefix.
 | CAL-E110 | Too many formats in multi-format list (maximum 5) |
 | CAL-E113 | Duplicate format key in multi-format list (alias or canonical name collision) |
 
-### Authorization Errors (CAL-E120 -- CAL-E125, new in 1.3)
+### Authorization Errors (CAL-E121 -- CAL-E126, new in 1.3)
+
+> The block begins at E121, not E120: the deployed dialect's registry had
+> already assigned CAL-E120 (JSON+CAL parse failure) before this draft, and
+> codes are append-only in every registry. E121 matches its shipped
+> `NotAuthorized` exactly.
 
 | Code | Description |
 |------|-------------|
-| CAL-E120 | TierNotSupported — the host does not implement this statement's tier (or has no authorization model for Tier 2/3) |
 | CAL-E121 | NotAuthorized — the session principal lacks the statement's verb on the target namespace. The message SHOULD name the missing verb, the resource, and the `GRANT` statement that would confer it |
-| CAL-E122 | UnknownPrincipal — the named or session principal does not resolve |
-| CAL-E123 | SelfApproval — the reviewing principal created, or triggered the run that authored, this recommendation |
-| CAL-E124 | ContextRefused — Tier 2/3 statement inside `BATCH`, a saved-query body, or `proposal_cal` where forbidden (§8.14.3) |
-| CAL-E125 | ReasonRequired — a required `BECAUSE` reason is missing or empty at execution |
+| CAL-E122 | TierNotSupported — the host does not implement this statement's tier (or has no authorization model for Tier 2/3) |
+| CAL-E123 | UnknownPrincipal — the named or session principal does not resolve |
+| CAL-E124 | SelfApproval — the reviewing principal created, or triggered the run that authored, this recommendation |
+| CAL-E125 | ContextRefused — Tier 2/3 statement inside `BATCH`, a saved-query body, or `proposal_cal` where forbidden (§8.14.3) |
+| CAL-E126 | ReasonRequired — a required `BECAUSE` reason is missing or empty at execution |
 
 ### Shortcut and Grain Type Errors (CAL-E060 -- CAL-E066)
 
@@ -3386,7 +3391,7 @@ ROLE                                        -- DEFINE ROLE, deferred (§3.2)
 
 | Version | Date | Change |
 |---------|------|--------|
-| 1.3-draft | 2026-08-10 | **The pillar changes, on purpose and in the open.** 1.0--1.2 promised "non-destructive by grammar; no unsafe mode." The promise was true and had a hidden cost: real deployments still needed erasure -- GDPR, retention -- so destruction happened anyway, outside the language, ungoverned by any spec. Exiling destruction never prevented it; it only prevented *specifying* it. 1.3 brings it inside, where grammar bounds its shape (whole grains by hash, identity, or age -- never a predicate, never a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and the audit trail sees it (a mandatory in-memory audit Observation per Tier-2 execution). Adds the four-tier model (Core/Evolve/Destroy/Control; tiers gate operations, not portability -- §2.2), Tier 2 statements `FORGET <hash>`/`FORGET SUBJECT`/`PURGE OLDER THAN` (§8.14), Tier 3 DCL `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL` over in-memory grant grains (§8.15, OMS §12.6), Tier 3 governance statements `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP` + `DESCRIBE loop`-family (§8.16), principal-bound sessions and the credential/policy split (§18.4), authorization error codes CAL-E120--E125, and the `cal_tiers` conformance declaration. `DEFINE ROLE` reserved, deferred. Every 1.0--1.2 document remains valid Tier-0/1 CAL; a session without grants is exactly the language those releases promised -- the floor, not the ceiling. |
+| 1.3-draft | 2026-08-10 | **The pillar changes, on purpose and in the open.** 1.0--1.2 promised "non-destructive by grammar; no unsafe mode." The promise was true and had a hidden cost: real deployments still needed erasure -- GDPR, retention -- so destruction happened anyway, outside the language, ungoverned by any spec. Exiling destruction never prevented it; it only prevented *specifying* it. 1.3 brings it inside, where grammar bounds its shape (whole grains by hash, identity, or age -- never a predicate, never a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and the audit trail sees it (a mandatory in-memory audit Observation per Tier-2 execution). Adds the four-tier model (Core/Evolve/Destroy/Control; tiers gate operations, not portability -- §2.2), Tier 2 statements `FORGET <hash>`/`FORGET SUBJECT`/`PURGE OLDER THAN` (§8.14), Tier 3 DCL `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL` over in-memory grant grains (§8.15, OMS §12.6), Tier 3 governance statements `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP` + `DESCRIBE loop`-family (§8.16), principal-bound sessions and the credential/policy split (§18.4), authorization error codes CAL-E121--E126, and the `cal_tiers` conformance declaration. `DEFINE ROLE` reserved, deferred. Every 1.0--1.2 document remains valid Tier-0/1 CAL; a session without grants is exactly the language those releases promised -- the floor, not the ceiling. |
 | 1.2 | 2026-08-03 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Also adds the **`ELEMENT` shorthand** for custom templates (Section 10.6.1): `DEFINE TEMPLATE <name> AS "<text>"` and `FORMAT TEMPLATE "<text>"`, both defined by equivalence to an `ELEMENT` section, plus the `template_shorthand` production and `"TEMPLATE" , string_literal` in `format_spec`. This also corrects two 1.1 defects in the same examples (Sections 10.1.1, 14.2.1, 27): the `TEMPLATE "..."` form they use was not admitted by the Section 4 grammar, and they interpolated bare `{{subject}}`/`{{object}}` rather than the `grain.` namespace that Section 10.5 defines and Section 10.8 closes. Backward-compatible. |
 | 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. As part of the OMS v1.4 release, also adds the Skill grain type (`0x0B`) to the closed query set (`RECALL skills` / `ADD skill`, type-specific field set, `<skill>` projection, TOON columns, `mg:capable_of` in the `AGENCY` shortcut) and corrects `belief`/`action` literals the rename left behind (`grain_type_plural`, `RECALL MY`, TOON tables, `DESCRIBE` listing, `CAL-E051`). |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
