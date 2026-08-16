@@ -1338,6 +1338,70 @@ In distributed systems:
 
 ---
 
+### 10.5 Pseudonymized Egress (new in 1.6)
+
+Selective disclosure (Sections 10.1-10.4) hides fields from a *receiving
+store*. Pseudonymized egress addresses the other disclosure channel: the
+**external model**. When context leaves for an LLM, sensitive values are
+replaced with category-typed placeholder tokens (`[PERSON_1]`,
+`[EMAIL_2]`); the placeholder-to-value mapping stays with the holder, and
+the model's response is rehydrated by exact token replacement before the
+caller sees it. This is **pseudonymization, not anonymization** -- an
+implementation MUST NOT describe it otherwise: with the mapping retained,
+the egress stream remains personal data, and rich content stays linkable
+under auxiliary-knowledge attacks regardless of identifier removal.
+
+#### 10.5.1 The `anon:<namespace>` policy (reserved store-metadata prefix)
+
+A per-namespace JSON policy declaring mode (`off | egress | ingress | both
+| audit`), category-to-action mappings (`pseudonym | mask | redact |
+generalize:<bucket> | allow`), detector demands, pseudonym scope, and
+placeholder template. Conformance requirements:
+
+- **Replication is write-if-absent.** Like retention declarations, a sync
+  MUST NOT silently swap a live local policy, and an applied row MUST take
+  effect on the live handle rather than at the next open.
+- **An unreadable policy row fails reads closed.** A policy the
+  implementation cannot parse MUST NOT silently mean "no policy": reads of
+  covered namespaces refuse until the row is repaired, while policy writes
+  keep working so it can be.
+- **Declaring a policy stamps the file's minimum-reader version**, so an
+  older implementation is warned loudly at open that the file declares
+  protection it cannot honor.
+- Value-derived (cross-handle-stable) pseudonyms MUST be keyed from the
+  file's encryption key; an implementation MUST refuse such declarations
+  on an unencrypted file rather than degrade to unkeyed derivation.
+
+#### 10.5.2 The `vault:` prefix (reserved, never replicated)
+
+`vault:<namespace>:<placeholder>` rows persist the sealed
+placeholder-to-value mapping for flows that must rehydrate across
+processes. Conformance requirements are prohibitions:
+
+- The prefix is **reserved**; implementations MUST NOT repurpose it.
+- Vault rows **MUST NOT ride bundles or segments in either direction** --
+  export omits them and import refuses them. A re-identification table
+  travelling to a replica undoes the pseudonymization it serves.
+- Values MUST be sealed under a key derived from the file's encryption key
+  with its own domain separation, so destroying the file key destroys the
+  vault -- crypto-erasure reaches it by construction.
+- **Erasure reaches the vault**: subject erasure (CAL `FORGET SUBJECT`)
+  MUST also remove every vault row and live mapping entry whose plaintext
+  names the erased identity, and MUST treat a failure to do so as an
+  error, never best-effort.
+- Reverse lookup (reveal / CAL `REHYDRATE`) is a privileged act: gated on
+  a grant and recorded as a Tier-2 audit Observation naming value
+  *fingerprints*, never identities.
+
+#### 10.5.3 The `anonymized` response report
+
+When an egress policy is active, query responses carry an `anonymized`
+object beside the result: covered namespaces, whether a host-level floor
+forced coverage, and per-namespace mapping **ids**. The mappings
+themselves MUST NOT ride any response payload -- rehydration custody stays
+with the holding process. Consumers MUST treat the field's absence as
+"values are as stored", never as "values are safe".
+
 ## 11. File Format (.mg files)
 
 ### 11.1 Purpose

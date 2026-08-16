@@ -9,7 +9,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [1.6-draft] — 2026-08-10 (RFC, open for comment)
+## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16)
+
+### Added in the anonymization batch (2026-08-16)
+
+- **OMS §10.5 Pseudonymized Egress**: the placeholder disclosure model for
+  external models; the reserved `anon:<namespace>` policy prefix
+  (write-if-absent replication, fail-closed unreadable rows,
+  minimum-reader-version stamping, keyed value-derived pseudonyms only on
+  encrypted files); the reserved never-replicating `vault:` prefix (sealed
+  under a file-key-derived subkey, erased with the subject, revealed only
+  under grant + fingerprint-only audit); the `anonymized` response report
+  (mapping ids only).
+- **CAL §8.1.2 / §8.2.1 `WITH anonymize("<level>")`**: strengthen-only, on
+  RECALL and per-ASSEMBLE-source — the file-declared policy remains the
+  gate; query text can only add severity.
+- **CAL §8.17 `REHYDRATE`** (Tier 3): the round trip's return leg;
+  classification stated (re-identification is never a plain read), gated,
+  audited by fingerprint; `CAL-E127 MappingUnknown`.
 
 > This entry describes a **draft**. The `release/oms-v1.6` branch is the
 > comment window; nothing below is normative until release.

@@ -321,7 +321,8 @@ statement       = explain_stmt | recall_stmt | assemble_stmt | set_stmt
                 | forget_stmt | purge_stmt                        (* Tier 2 *)
                 | grant_stmt | revoke_stmt | show_grants_stmt     (* Tier 3 *)
                 | approve_stmt | reject_stmt | apply_stmt
-                | rollback_stmt | run_loop_stmt ;                 (* Tier 3 *)
+                | rollback_stmt | run_loop_stmt
+                | rehydrate_stmt ;                                (* Tier 3 *)
 
 (* --- Tier 0: Read --- *)
 
@@ -486,11 +487,13 @@ with_option     = "superseded" | "score_breakdown" | "explanation" | "provenance
                 | "dedup" , "(" , field_name , ")"
                 | "locale" , "(" , string_literal , ")"
                 | "cache" , "(" , "ttl" , "=" , positive_integer , ")"
+                | "anonymize" , "(" , anonymize_level , ")"
                 | extension_option ;
 diversity_spec  = "mmr" , [ "," , "lambda" , "=" , number ]
                 | "threshold" , "," , number ;
 consistency_level = "eventual" | "bounded" , "(" , number , ")" | "linearizable" ;
 disclosure_level = "summary" | "headlines" | "full" ;
+anonymize_level = "standard" | "strict" ;
 extension_option = "x_" , identifier , [ "(" , value_list , ")" ] ;
 
 pipeline        = { pipe_stage } ;
@@ -547,6 +550,8 @@ grant_stmt      = "GRANT" , verb_list , "ON" , ns_scope , "TO" , principal ,
 revoke_stmt     = "REVOKE" , verb_list , "ON" , ns_scope , "FROM" , principal ,
                   [ with_clause ] ;
 show_grants_stmt = "SHOW" , "GRANTS" , [ "FOR" , principal ] ;
+rehydrate_stmt  = "REHYDRATE" , string_literal ,
+                  "WITH" , "mapping" , "(" , string_literal , ")" ;
 verb_list       = verb , { "," , verb } ;
 verb            = "read" | "write" | "supersede" | "delete" | "erase"
                 | "loop.run" | "loop.review" | "loop.apply" | "admin" ;
@@ -992,6 +997,30 @@ RECALL events THREAD "sess-123"
 RECALL events THREAD FROM sha256:a1b2c3d4...
 ```
 
+#### 8.1.2 WITH anonymize (new in 1.3)
+
+```sql
+RECALL facts WHERE subject = "caller:john" WITH anonymize("strict")
+```
+
+Requests pseudonymized results for this one query. **Strengthen-only**: the
+option MAY raise the treatment an active egress policy (OMS Section 10.5)
+would apply -- `"standard"` asserts the declared policy (a no-op where one
+is active), `"strict"` treats every category at redaction severity -- and
+MUST NOT weaken or disable a file-declared policy. Two reasons the
+weakening form does not exist, both load-bearing:
+
+1. Unknown WITH options warn-and-skip (Section 25 forward compatibility),
+   so on an older implementation this option silently does nothing. That is
+   survivable only because it was never the gate -- the file-declared
+   policy is.
+2. A weakening spelling would make every query author a policy author. The
+   file's declaration MUST outrank query text, or the policy is advisory.
+
+Implementations without anonymization support treat the option as unknown
+(warn-and-skip); consumers MUST NOT read the absence of the response's
+`anonymized` report as "values are safe".
+
 ### 8.2 ASSEMBLE (Tier 0)
 
 The flagship new statement. Composes a context block from multiple RECALL sources with token budgets, priority ordering, format control, and progressive disclosure.
@@ -1040,6 +1069,22 @@ Token estimation is approximate by design. The response MUST report actual token
 | Max context_name length | 64 characters |
 | Max FOR string length | 256 characters |
 | ASSEMBLE timeout | 10,000ms |
+
+#### 8.2.1 Per-source anonymize override (new in 1.3)
+
+A named source MAY carry its own `WITH anonymize(...)`, same strengthen-only
+rule as Section 8.1.2: a mounted source's own file policy applies first, and
+the override can only add severity on top. This is the multi-file case where
+per-source treatment genuinely differs -- a mounted org replica may warrant
+stricter handling than the session's own memory.
+
+```sql
+ASSEMBLE briefing FOR "customer call prep"
+  FROM
+    work:       (RECALL facts ABOUT "caller:john" LIMIT 20) WITH anonymize("strict"),
+    background: (RECALL org.facts ABOUT "acme" LIMIT 10)
+  BUDGET 1500 tokens
+```
 
 ### 8.3 EXISTS (Tier 0)
 
@@ -1434,6 +1479,36 @@ DESCRIBE policy      -- the effective host policy (read)
 - Governance statements are refused inside `BATCH`, saved-query bodies, and
   `proposal_cal` (§8.14.3) -- no one-round-trip approve-and-apply macro, and
   no recommendation whose payload approves other recommendations.
+
+### 8.17 REHYDRATE (Tier 3 -- new in 1.3)
+
+```sql
+REHYDRATE "Hi [PERSON_1], I've verified pin [PIN_1]." WITH mapping("a1b2c3d4e5f60718")
+```
+
+The return leg of the pseudonymization round trip (OMS Section 10.5):
+replaces exact placeholder tokens in the text with their originals from the
+mapping the id names. Unmatched tokens are left intact and reported, never
+guessed.
+
+**Classification: Control -- stated rather than hidden, because rehydration
+is re-identification.** The statement MUST NOT classify as a plain read: an
+implementation with authorization MUST gate it on the `admin` verb (or an
+equivalent dedicated grant) and MUST write a Tier-2 audit Observation per
+execution carrying the revealed values' *fingerprints*, never the
+identities -- the same non-re-identifying audit rule bulk erasure follows
+(Section 21). An implementation whose statement classification is
+exhaustive-without-wildcard is forced to decide this at build time, which
+is the point.
+
+**Resolution.** The mapping id resolves against the session's live mappings
+first, then the file's sealed vault (OMS Section 10.5.2). An id whose
+mapping no longer exists is an error (CAL-E127), not an empty substitution
+-- silently returning the placeholders would be indistinguishable from a
+model echoing them.
+
+Refused inside `BATCH`, saved-query bodies, and `proposal_cal`, like every
+Tier 2/3 statement (Section 8.14.3).
 
 ---
 
@@ -2883,7 +2958,7 @@ Everything in Core, plus:
 - `LET` bindings
 - All semantic shortcuts (SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN)
 - `ASSEMBLE` statement with BUDGET, PRIORITY, FORMAT
-- Advanced `WITH` options (diversity, score_breakdown, explanation, provenance, progressive_disclosure)
+- Advanced `WITH` options (diversity, score_breakdown, explanation, provenance, progressive_disclosure, anonymize)
 - `AS` per-query format control
 - `application/json+cal` wire format (dual wire format)
 - Error suggestion system ("did you mean?")
@@ -3076,6 +3151,9 @@ It can read, assemble, and evolve memories, but never delete them.
 - REASON is mandatory for all evolve operations; BECAUSE is mandatory for
   governance and bulk-erasure statements.
 - Use HISTORY to check current version before SUPERSEDE.
+- WITH anonymize("standard"|"strict") can only STRENGTHEN a file-declared
+  pseudonymization policy, never weaken one; REHYDRATE (reverse lookup)
+  is grant-gated and audited like destruction.
 ```
 
 ---
@@ -3183,6 +3261,7 @@ All error codes use the `CAL-E` prefix.
 | CAL-E124 | SelfApproval — the reviewing principal created, or triggered the run that authored, this recommendation |
 | CAL-E125 | ContextRefused — Tier 2/3 statement inside `BATCH`, a saved-query body, or `proposal_cal` where forbidden (§8.14.3) |
 | CAL-E126 | ReasonRequired — a required `BECAUSE` reason is missing or empty at execution |
+| CAL-E127 | MappingUnknown — `REHYDRATE` named a mapping id that resolves to neither a live session mapping nor a vault entry |
 
 ### Shortcut and Grain Type Errors (CAL-E060 -- CAL-E066)
 
@@ -3272,7 +3351,7 @@ EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE,
 ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, AS,
 FOR, FROM, BUDGET, PRIORITY, FORMAT,
 LET, THREAD, DIFF,
-ADD, SUPERSEDE, REVERT, SET, REASON, BECAUSE,
+ADD, SUPERSEDE, REVERT, SET, REASON, BECAUSE, REHYDRATE,
 FORGET, PURGE, SUBJECT, OLDER, THAN, TYPE,
 GRANT, REVOKE, ON, TO, SHOW, GRANTS, PRINCIPAL,
 APPROVE, REJECT, APPLY, ROLLBACK, RUN, LOOP, FULL,
@@ -3393,7 +3472,7 @@ ROLE                                        -- DEFINE ROLE, deferred (§3.2)
 
 | Version | Date | Change |
 |---------|------|--------|
-| 1.3-draft | 2026-08-10 | **The pillar changes, on purpose and in the open.** 1.0--1.2 promised "non-destructive by grammar; no unsafe mode." The promise was true and had a hidden cost: real deployments still needed erasure -- GDPR, retention -- so destruction happened anyway, outside the language, ungoverned by any spec. Exiling destruction never prevented it; it only prevented *specifying* it. 1.3 brings it inside, where grammar bounds its shape (whole grains by hash, identity, or age -- never a predicate, never a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and the audit trail sees it (a mandatory in-memory audit Observation per Tier-2 execution). Adds the four-tier model (Core/Evolve/Destroy/Control; tiers gate operations, not portability -- §2.2), Tier 2 statements `FORGET <hash>`/`FORGET SUBJECT`/`PURGE OLDER THAN` (§8.14), Tier 3 DCL `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL` over in-memory grant grains (§8.15, OMS §12.6), Tier 3 governance statements `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP` + `DESCRIBE loop`-family (§8.16), principal-bound sessions and the credential/policy split (§18.4), authorization error codes CAL-E121--E126, and the `cal_tiers` conformance declaration. `DEFINE ROLE` reserved, deferred. Every 1.0--1.2 document remains valid Tier-0/1 CAL; a session without grants is exactly the language those releases promised -- the floor, not the ceiling. |
+| 1.3-draft | 2026-08-10 | **The pillar changes, on purpose and in the open.** 1.0--1.2 promised "non-destructive by grammar; no unsafe mode." The promise was true and had a hidden cost: real deployments still needed erasure -- GDPR, retention -- so destruction happened anyway, outside the language, ungoverned by any spec. Exiling destruction never prevented it; it only prevented *specifying* it. 1.3 brings it inside, where grammar bounds its shape (whole grains by hash, identity, or age -- never a predicate, never a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and the audit trail sees it (a mandatory in-memory audit Observation per Tier-2 execution). Adds the four-tier model (Core/Evolve/Destroy/Control; tiers gate operations, not portability -- §2.2), Tier 2 statements `FORGET <hash>`/`FORGET SUBJECT`/`PURGE OLDER THAN` (§8.14), Tier 3 DCL `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL` over in-memory grant grains (§8.15, OMS §12.6), Tier 3 governance statements `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP` + `DESCRIBE loop`-family (§8.16), principal-bound sessions and the credential/policy split (§18.4), authorization error codes CAL-E121--E126, and the `cal_tiers` conformance declaration. `DEFINE ROLE` reserved, deferred. The anonymization batch (2026-08-16) adds `WITH anonymize("<level>")` as a strengthen-only recall/per-source option (§8.1.2, §8.2.1), the Tier-3 `REHYDRATE` statement with its stated classification obligation (§8.17, CAL-E127), pairing OMS §10.5's pseudonymized-egress model. Every 1.0--1.2 document remains valid Tier-0/1 CAL; a session without grants is exactly the language those releases promised -- the floor, not the ceiling. |
 | 1.2 | 2026-08-03 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Also adds the **`ELEMENT` shorthand** for custom templates (Section 10.6.1): `DEFINE TEMPLATE <name> AS "<text>"` and `FORMAT TEMPLATE "<text>"`, both defined by equivalence to an `ELEMENT` section, plus the `template_shorthand` production and `"TEMPLATE" , string_literal` in `format_spec`. This also corrects two 1.1 defects in the same examples (Sections 10.1.1, 14.2.1, 27): the `TEMPLATE "..."` form they use was not admitted by the Section 4 grammar, and they interpolated bare `{{subject}}`/`{{object}}` rather than the `grain.` namespace that Section 10.5 defines and Section 10.8 closes. Backward-compatible. |
 | 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. As part of the OMS v1.4 release, also adds the Skill grain type (`0x0B`) to the closed query set (`RECALL skills` / `ADD skill`, type-specific field set, `<skill>` projection, TOON columns, `mg:capable_of` in the `AGENCY` shortcut) and corrects `belief`/`action` literals the rename left behind (`grain_type_plural`, `RECALL MY`, TOON tables, `DESCRIBE` listing, `CAL-E051`). |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
