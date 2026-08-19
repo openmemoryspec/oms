@@ -1618,6 +1618,14 @@ definition *is*, and an incoming update MUST leave the local stamp intact. This
 is the same split §27.8 draws for triggers and §8.12 draws for governance
 state: **what a definition is replicates; where one host got to does not.**
 
+**Identity.** A saved query carries the two stamps OMS §28.4.1 requires of any
+stored definition: `updated_at` (the replication tiebreaker) and
+`definition_hash` (the SHA-256 identity of this revision's body). Both are
+reported by `DESCRIBE QUERIES` (§8.18.4). This is what makes
+`query:<namespace>/<name>` a pinnable Recommendation target (OMS §8.12) — a
+governed change to a saved query can name the revision it replaced and store an
+inverse that reinstates exactly that one.
+
 A point-in-time restore reconstructs grain history and MUST skip the
 definition registry -- a restore to last Tuesday is a statement about memory,
 not an instruction to revert an operator's query edits -- and MUST report that
@@ -1728,8 +1736,9 @@ and it is lossless against memory (§2.4). Dropping an absent name is
 `CAL-E130`.
 
 `DESCRIBE QUERIES` is Tier 0 and lists the registered definitions -- name,
-description, parameter count, body size, revision stamp, and last-execution
-stamp where the host keeps one. It is the discovery surface an agent uses to
+description, parameter count, body size, both revision stamps (`updated_at` and
+`definition_hash`, §8.18.1), and the last-execution stamp where the host keeps
+one. It is the discovery surface an agent uses to
 find what it may `RUN`.
 
 `DESCRIBE capabilities` SHOULD report saved-query support and the limits of
@@ -2153,6 +2162,61 @@ definition MUST NOT combine the two forms.
 </context>
 ```
 
+### 10.6.3 Template identity, revision, and DROP TEMPLATE (new in 1.3)
+
+A registered template is a **stored definition** and lives in the memory's
+metadata table under `tpl:<name>` (OMS §28.4.1), on exactly the terms §8.18.1
+sets out for saved queries: carried by the memory rather than the client, not a
+grain, replicating latest-wins, with usage stamps that do not replicate.
+
+**Identity.** A template's identity is `<namespace>/<name>` — the form OMS
+§8.12 already uses as a Recommendation `target_ref`. Versions 1.0–1.2 gave a
+template a bare 64-character name and nothing else, which left that target
+unpinnable: a Recommendation applied against `template:acct/invoice_row` could
+not say which revision it changed, and so could not store an honest inverse.
+
+Every stored template therefore carries the two stamps OMS §28.4.1 requires of
+any definition — `updated_at` (the replication tiebreaker) and
+`definition_hash` (the SHA-256 identity of this revision's body). A host MUST
+report both from `DESCRIBE TEMPLATES`, so a reviewer can see which revision a
+proposal targets and an auditor can tell whether the template that rendered a
+`summary` is still the template that would render it now.
+
+The revision covers the template's **own** body, not its parent's. A template
+that `EXTENDS` a preset resolves against whatever that preset is at render
+time; presets are implementation-shipped and versioned with the
+implementation, so they are not stored definitions and have no
+`definition_hash`.
+
+**Built-ins are not stored definitions.** The presets and built-in templates an
+implementation ships are code, not metadata. They MUST NOT be droppable, MUST
+NOT be overwritten by `DEFINE TEMPLATE`, and MUST NOT be persisted into the
+metadata table — a memory that carried a copy of a built-in would pin one
+implementation's rendering of it forever.
+
+**DROP TEMPLATE.**
+
+```sql
+DROP TEMPLATE "invoice_row"
+DESCRIBE TEMPLATES
+```
+
+`DROP TEMPLATE` removes a stored template definition. It is Tier 3 (`admin`),
+it touches no grain, and it is lossless against memory (§2.4): the grains the
+template ever rendered are untouched, and re-running the `DEFINE` restores it
+byte-for-byte. Dropping a name that does not exist, or a built-in, is an error;
+dropping a template another template `EXTENDS` MUST be refused rather than
+leaving a dangling parent.
+
+Nothing here is retroactive. Output already rendered through a dropped or
+replaced template is text that was already produced; a template is a rendering
+instruction (§10.8), so changing one changes what renders *next*.
+
+`UNDEFINE` remains reserved and unspecified (§2.4, Appendix D). It was the
+placeholder for these semantics, `DROP TEMPLATE` is the spelling that shipped,
+and an implementation MUST NOT accept `UNDEFINE` as an alias for it.
+
+
 ### 10.7 Template Inheritance
 
 Templates inherit from presets via `EXTENDS`. Sections not defined in the template use the parent preset's definition. Inheritance depth is limited to 1 (template -> preset only). Default parent is `readable`.
@@ -2182,6 +2246,7 @@ Templates are rendering instructions, not programs:
 | Template name length | 64 characters |
 | Inheritance depth | 1 |
 | Variable set | Closed |
+| Revision stamps | `updated_at` + `definition_hash` (§10.6.3, OMS §28.4.1) |
 
 ### 10.9 TOON — Token-Oriented Object Notation
 

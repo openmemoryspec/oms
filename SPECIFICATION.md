@@ -1130,7 +1130,7 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 
 **Required fields:**
 - `type` = "recommendation"
-- `target_ref` (string) — the change target as `<scheme>:<opaque>`. Standard schemes: `grain:sha256:<hash>` (a specific grain), `entity:<namespace>/<subject>` (an entity), `query:<namespace>/<name>` (a saved query, CAL §8.18), `template:<namespace>/<name>` (a template, CAL §10.6), `doc:<host-id>` (a host document, e.g. `doc:claude.md`), `host:<opaque>` (an opaque host object). The scheme is the target-kind discriminator; the scheme set is open for host-defined targets.
+- `target_ref` (string) — the change target as `<scheme>:<opaque>`. Standard schemes: `grain:sha256:<hash>` (a specific grain), `entity:<namespace>/<subject>` (an entity), `query:<namespace>/<name>` (a saved query, CAL §8.18), `template:<namespace>/<name>` (a template, CAL §10.6) — either MAY be revision-qualified as `…@<definition_hash>` (§28.4.1) —, `doc:<host-id>` (a host document, e.g. `doc:claude.md`), `host:<opaque>` (an opaque host object). The scheme is the target-kind discriminator; the scheme set is open for host-defined targets.
 - `analyzer` (map) — the producing logic: `{id: string, params?: map}`, where `id` is a versioned identifier `publisher.name/major` (e.g. `"waiser.duplicate_sweep/1"`) and `params` is an optional snapshot of the parameters it ran with. Full "why" provenance without a second grain.
 - `summary` (map) — a deterministic, template-rendered description: `{template_id: string, args: map}`. An analyzer MUST NOT store free prose here; the human-readable string is produced by rendering `template_id` with `args`, so summaries stay reproducible and translatable.
 - `dedup_key` (string) — the recommendation's stable proposal identity, computed (never author-chosen) per normative rule 5. Two recommendations with the same `dedup_key` are the same proposal; a supersession chain (evidence refresh, a growing cluster) shares one `dedup_key` across all of its content addresses.
@@ -1157,13 +1157,13 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 - **Authoritative record.** Each lifecycle transition is one immutable **audit Observation grain** (§8.6) hash-chained per recommendation: its `derived_from` includes the recommendation's content address and the previous audit grain's address (plus any result addresses). The acting principal is recorded in the audit grain's existing `observer_id` (§8.6) — e.g. `"user:alice"`, `"agent:worker-3"`, `"policy:auto"` — and its class in `observer_type`, which MUST be either `"human"` (registered, §24.2) or one of the namespaced values `"rec:agent"`, `"rec:policy"`, `"rec:system"` (§24.3). No field beyond the Observation schema is introduced. The transition's mandatory human-readable reason is carried in the audit grain's `object` (§6.1) — the common field CAL projects as an Observation's text content (CAL §10.3.2), so the reason renders correctly in SML with no additional rule (RECOMMENDED ≤ 500 chars). An audit grain's `observer_id` MUST NOT be elided under §10.2: the acting principal is what makes the chain tamper-evident, and a selectively-disclosed chain that has dropped it is no longer an audit trail. The chain is portable, tamper-evident, and fork-mergeable.
 - **State machine.** `pending → approved | rejected`; `approved → applied`; `applied → rolled_back`; and `rejected → pending`, which lets a recommendation re-enter review on refreshed evidence under its existing `dedup_key` rather than becoming a second proposal. `pending → applied` directly is permitted **only** when the transition's `observer_type` is `"rec:policy"` (auto-apply); `observer_type` — never `observer_id` — is the discriminator for this gate, since `observer_id` is a host-asserted label with no normative structure. `applied` and `rolled_back` are terminal. `expired` is computed from `valid_to` and is reachable only from `pending` or `approved`; an expired recommendation MUST NOT be applied, and expiry of an `approved` recommendation withdraws that approval.
 - **Content vs. lifecycle.** A change in the recommendation's *content* (refreshed evidence, a larger cluster) is a **supersession** of the grain — a new content address with the **same `dedup_key`** — not a status change. Lifecycle ≠ content. A supersession MUST reset the superseding grain's `rec_status` to `pending`: approval is granted to specific content and never carries forward to content no reviewer has seen.
-- **Reproducible undo.** The inverse of an applied proposal is derived at apply time and recorded on the applied audit grain as a store-operation plan (no new CAL syntax): a `SUPERSEDE` reinstates the prior content; an `ADD` is undone by superseding the added grain with `invalidation_type: "retraction"`, which closes its `system_valid_to` and removes it from the default recall path while the blob itself survives (§5.6, §28.3) — OMS defines no separate tombstone mechanism, and none is needed; a `REVERT` is undone by superseding back to the reverted head; a document edit supersedes back to the prior head. Because CAL's Tier-1 statements are structurally non-destructive, every Tier-1-only `proposal_cal` is rollbackable. A `proposal_cal` carrying CAL Tier-2 destruction (tombstone or erasure — one-way by definition, CAL §8.14.1) MUST be recorded as **not rollbackable** on the applied audit grain. A `proposal_data` change is opaque to OMS and MAY be irreversible: a host that cannot derive an inverse for one MUST record it as not rollbackable on the applied audit grain rather than offer a rollback it cannot perform.
+- **Reproducible undo.** The inverse of an applied proposal is derived at apply time and recorded on the applied audit grain as a store-operation plan (no new CAL syntax): a `SUPERSEDE` reinstates the prior content; an `ADD` is undone by superseding the added grain with `invalidation_type: "retraction"`, which closes its `system_valid_to` and removes it from the default recall path while the blob itself survives (§5.6, §28.3) — OMS defines no separate tombstone mechanism, and none is needed; a `REVERT` is undone by superseding back to the reverted head; a document edit supersedes back to the prior head; a **definition change** (§28.4.1) is undone by rewriting the replaced body recorded on the applied audit grain — which is why recording it is mandatory there, and why a definition target SHOULD be revision-qualified when proposed. Because CAL's Tier-1 statements are structurally non-destructive, every Tier-1-only `proposal_cal` is rollbackable. A `proposal_cal` carrying CAL Tier-2 destruction (tombstone or erasure — one-way by definition, CAL §8.14.1) MUST be recorded as **not rollbackable** on the applied audit grain. A `proposal_data` change is opaque to OMS and MAY be irreversible: a host that cannot derive an inverse for one MUST record it as not rollbackable on the applied audit grain rather than offer a rollback it cannot perform.
 
 **Normative rules:**
 1. Exactly one of `proposal_cal`, `proposal_edit`, `proposal_data` MUST be present.
 2. Recommendation grains MUST NOT be mutated in place; every content change is a supersession, every lifecycle transition an audit Observation grain (§8.6). The `rec_status` index-layer cache MUST be reconstructible from the audit chain alone.
 3. Lifecycle-derived state MUST NOT be writer-settable: `rec_status` is an index-layer field (§5.6, §6.1, §28.3), so the general rule that writers MUST NOT set index-layer fields applies to it, and a `SUPERSEDE … SET` targeting it MUST be rejected. Transitions occur only through the review/apply path that emits audit grains.
-4. `summary.template_id` MUST reference a deterministic template and `summary.args` MUST carry the values it interpolates; implementations MUST NOT store analyzer-authored free prose in `summary`.
+4. `summary.template_id` MUST reference a deterministic template and `summary.args` MUST carry the values it interpolates; implementations MUST NOT store analyzer-authored free prose in `summary`. Where the referenced template is a stored definition (§28.4.1), `template_id` SHOULD carry its revision as `<name>@<definition_hash>`: a template is editable host metadata, so a bare name renders a *summary* whose text can silently change after the reviewer approved it. A host that resolves a bare name MUST resolve it to the current revision and record which one it used on the audit grain.
 5. `dedup_key` MUST be computed (never author-chosen) as the lowercase hex SHA-256 of three NUL-separated, UTF-8 encoded components — **analyzer-family**, **`target_ref`**, **action-kind** — in exactly this order:
 
    ```
@@ -3385,6 +3385,30 @@ memory alongside its grains.
 | `anon:<namespace>` | A pseudonymized-egress policy | Yes — write-if-absent | §10.5.1 |
 | `vault:<namespace>:<placeholder>` | A sealed placeholder→value mapping | **Never, in either direction** | §10.5.2 |
 | `trg:<trigger>` | Per-host trigger evaluation state (baselines, cursors, dedup keys) | **No** — host-local by §27.8 | §27.8 |
+
+**Definition identity (normative).** A row under a *definition* prefix
+(`qry:`, `tpl:`) is a versionable object that other grains name and audit
+trails pin, so it MUST carry two distinct stamps, and an implementation MUST
+NOT collapse them:
+
+| Stamp | What it is | What it is for |
+|---|---|---|
+| `updated_at` | Epoch time the definition was last written | The replication tiebreaker (latest-wins) and the human-facing "when did this change" |
+| `definition_hash` | Lowercase hex SHA-256 over the NFC-normalized definition body, computed exactly as §5.2 computes a grain's content address over its canonical bytes | The stable identity of *this* revision |
+
+They answer different questions and neither substitutes for the other. A
+timestamp cannot identify a revision: two hosts that edit a template to the
+same body produce different `updated_at` values for identical content, and a
+latest-wins merge then picks a winner between two rows that do not actually
+differ. A hash cannot order revisions: it says *which* body, never *which
+came later*. Replication needs the ordering; an audit trail needs the identity.
+
+This closes the gap that made `template:<namespace>/<name>` and
+`query:<namespace>/<name>` unpinnable Recommendation targets (§8.12): a
+`target_ref` MAY carry the revision as `template:<namespace>/<name>@<definition_hash>`,
+and a Recommendation applied to a definition MUST record the **replaced body**
+on its applied audit grain, so the inverse it offers reinstates exactly the
+revision it displaced rather than "whatever was there before".
 
 Rows that record *usage* rather than definition — a last-execution stamp on a
 saved query, a last-evaluated stamp on a trigger — MUST NOT replicate even when

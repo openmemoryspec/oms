@@ -9,7 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query batch 2026-08-19)
+## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query and template-identity batches 2026-08-19)
 
 ### Added in the saved-query batch (2026-08-19)
 
@@ -44,6 +44,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
   the nearest available proxy for that property — this revision replaces the
   proxy with the property. `UNDEFINE` stays reserved and unspecified rather than
   becoming a second spelling; implementations MUST NOT accept it as an alias.
+
+### Added in the template-identity batch (2026-08-19)
+
+- **OMS §28.4.1 definition identity** — every stored definition (`qry:`, `tpl:`)
+  carries **two** stamps that an implementation MUST NOT collapse: `updated_at`
+  (the latest-wins replication tiebreaker and the "when did this change") and
+  `definition_hash` (SHA-256 over the NFC-normalized body — the stable identity
+  of *this* revision). Neither substitutes for the other: a timestamp cannot
+  identify a revision (two hosts editing to the same body get different stamps
+  for identical content), and a hash cannot order revisions. Answers
+  `openmemoryspec/oms#12 §2`.
+- **CAL §10.6.3 Template identity, revision, and `DROP TEMPLATE`** — templates
+  are stored definitions under `tpl:<name>` on §8.18.1's terms; both stamps are
+  reported by `DESCRIBE TEMPLATES`; built-ins are code, not metadata, and are
+  neither droppable nor persistable; dropping a template another template
+  `EXTENDS` is refused rather than left dangling.
+- **`template:<ns>/<name>@<definition_hash>`** — Recommendation targets may be
+  revision-qualified, and a Recommendation applied to a definition MUST record
+  the **replaced body** on its applied audit grain, so its inverse reinstates
+  the revision it displaced rather than "whatever was there before". §8.12
+  rule 4 additionally asks `summary.template_id` to carry its revision: a bare
+  name renders a summary whose text can silently change after a reviewer
+  approved it.
 
 ### Added in the trigger batch (2026-08-19)
 
