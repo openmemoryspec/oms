@@ -156,7 +156,7 @@ The guarantee is enforced at three reinforcing levels:
 | **0** | Core (default) | Query, count, explain, assemble, describe, batch. Cannot modify anything. | None. Default for all CAL sessions. |
 | **1** | Evolve (opt-in) | Add new grains, supersede, revert, view history. Append-only; never deletes. | Server opt-in; `write`/`supersede` verbs where Tier 3 is implemented, capability token with write quotas otherwise. |
 | **2** | Destroy | `FORGET <hash>`, `FORGET SUBJECT`, `PURGE OLDER THAN`. Whole-grain tombstone and bulk erasure -- one-way, audited. | `delete`/`erase` verbs. Requires *an* authorization model: host-defined authorization suffices (Tier 2 without Tier 3 is legal). A host with no authorization model MUST refuse Tier 2. |
-| **3** | Control | `GRANT`/`REVOKE` (DCL), the governance lifecycle (`APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP`), principal-bound sessions. | `admin` and `loop.*` verbs; implies the grant model (OMS §12.6) that Tier 2 consumes. |
+| **3** | Control | `GRANT`/`REVOKE` (DCL), the governance lifecycle (`APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP`), the definition surface (`DEFINE QUERY`/`DROP QUERY`, `DEFINE TEMPLATE`/`DROP TEMPLATE`), principal-bound sessions. | `admin` and `loop.*` verbs; implies the grant model (OMS §12.6) that Tier 2 consumes. |
 
 **Tiers gate operations, not portability.** Interoperability rides the `.mg` file and Tier-0 reads: any Core implementation can read any memory. A read-only implementation declares Tier 0 and remains fully conformant forever -- nothing in Tier 2/3 is required of it. Hosts declare their tiers, and `DESCRIBE capabilities` MUST report them, so an agent (or a test suite) learns what it may attempt before attempting it.
 
@@ -185,7 +185,7 @@ The guarantee is enforced at three reinforcing levels:
 The following tokens do **not exist** in CAL's lexer or grammar, at any tier:
 
 ```
-DELETE, DROP, ERASE, DESTROY, TRUNCATE,                     -- Predicate/unbounded destruction
+DELETE, ERASE, DESTROY, TRUNCATE,                           -- Predicate/unbounded destruction
 INSERT, CREATE, WRITE, STORE,                               -- Unconstrained creation
 KEY, ENCRYPT, DECRYPT, ROTATE, MASTER, DEK, SECRET, TOKEN,  -- Key/credential management
 POLICY, SEAL, UNSEAL, CONSENT, RESTRICT,                    -- Sealed policy / consent records
@@ -195,6 +195,25 @@ SCHEMA, PARTITION, INDEX, MIGRATION                         -- Schema
 If these appear in a query, they are parse errors, not recognized keywords. This list is permanent: no future tier unblocks it. (`POLICY` here means the sealed policy and loop-policy *writes*; the read-only `DESCRIBE policy` target is an identifier, not this keyword.)
 
 **Changed in 1.3:** `FORGET` and `PURGE` moved from this list to the Tier 2 keyword set, and `GRANT`/`REVOKE` to the Tier 3 keyword set (§3.2). The block on them existed to force a specification-level decision before any destructive or control surface entered the language -- this revision is that decision, and the statements it admits are bounded by §2.1--§2.3.
+
+**Also changed in 1.3 -- `DROP`, and why the permanence claim survives it.**
+`DROP` leaves this list, admitted by a production with a **closed two-target
+set**: `DROP TEMPLATE` (§10.6.3) and `DROP QUERY` (§8.18.4). Neither target is
+memory. A template and a saved query are *host metadata* -- definitions the
+memory carries so they travel with the file (OMS §28.4.1), never grains, never
+content-addressed, never returned by a read. There is no production by which
+`DROP` reaches a grain, so the claim this list encodes -- that no CAL statement
+destroys memory outside the audited, authorization-gated Tier-2 shapes -- is
+unchanged. What was permanent was the exclusion of unbounded destruction *of
+memory*; the token was blocked as the nearest available proxy for that, and
+this revision replaces the proxy with the property itself. Removing a
+definition is idempotent and lossless against memory: every grain the query
+ever recalled is still there, and re-running the `DEFINE` restores it exactly.
+
+`UNDEFINE` remains reserved (Appendix D) and unspecified. It was held for these
+semantics; `DROP TEMPLATE`/`DROP QUERY` are the spelling that shipped, so
+`UNDEFINE` stays reserved rather than becoming a second one -- an
+implementation MUST NOT accept it as an alias.
 
 Note: Tier 1/2/3 keywords are always **parsed** (so `EXPLAIN FORGET ...` works as a dry-run even where execution is unavailable). The **executor** rejects non-EXPLAIN statements above the session's effective tier: `CAL-E044: Tier1NotEnabled` for Tier 1, `CAL-E121`/`CAL-E122` for Tier 2/3 (§22). This two-layer approach ensures `EXPLAIN` can always preview an operation without risk.
 
@@ -240,8 +259,14 @@ FORGET, PURGE, SUBJECT, OLDER, THAN, TYPE, BECAUSE
 **Tier 3 (Control) keywords (new in 1.3; always parsed; execution requires the `admin`/`loop.*` verbs -- see sections 8.14 and 8.15):**
 ```
 GRANT, REVOKE, ON, TO, SHOW, GRANTS, PRINCIPAL,
-APPROVE, REJECT, APPLY, ROLLBACK, RUN, LOOP, FULL
+APPROVE, REJECT, APPLY, ROLLBACK, RUN, LOOP, FULL,
+QUERY, QUERIES, DESCRIPTION, DROP                         -- definition surface (§8.18, §10.6.3)
 ```
+
+`RUN` serves two statements distinguished by their next token: `RUN LOOP`
+(§8.16) and `RUN "<name>"` (§8.18.3). A saved query name is a **string
+literal**, so the two never collide -- `LOOP` is a keyword and can never be a
+quoted name.
 
 `BECAUSE` was already an alias of `REASON` in `reason_clause`; Tier 2/3 statements conventionally write `BECAUSE`, and this specification uses that spelling for them throughout. `DEFINE ROLE` is **reserved but not specified** in 1.3 -- role bundles are deferred to a future revision; the 1.3 grant surface is verbs-only.
 
@@ -316,12 +341,14 @@ extractor       = "SUBJECTS" | "OBJECTS" | "HASHES" ;
 
 statement       = explain_stmt | recall_stmt | assemble_stmt | set_stmt
                 | exists_stmt | history_stmt | describe_stmt | batch_stmt
-                | coalesce_stmt | define_template_stmt
+                | coalesce_stmt | run_query_stmt
                 | add_stmt | supersede_stmt | revert_stmt
                 | forget_stmt | purge_stmt                        (* Tier 2 *)
                 | grant_stmt | revoke_stmt | show_grants_stmt     (* Tier 3 *)
                 | approve_stmt | reject_stmt | apply_stmt
                 | rollback_stmt | run_loop_stmt
+                | define_template_stmt | drop_template_stmt       (* Tier 3 *)
+                | define_query_stmt | drop_query_stmt             (* Tier 3 *)
                 | rehydrate_stmt ;                                (* Tier 3 *)
 
 (* --- Tier 0: Read --- *)
@@ -565,6 +592,24 @@ reject_stmt     = "REJECT"   , ( hash_literal | parameter ) , reason_clause ;
 apply_stmt      = "APPLY"    , ( hash_literal | parameter ) , reason_clause ;
 rollback_stmt   = "ROLLBACK" , ( hash_literal | parameter ) , reason_clause ;
 run_loop_stmt   = "RUN" , "LOOP" , [ "FULL" ] , [ with_clause ] ;
+
+(* --- Tier 3: the definition surface (new in 1.3) --- *)
+
+define_query_stmt = "DEFINE" , "QUERY" , query_name ,
+                    [ "(" , param_decl , { "," , param_decl } , ")" ] ,
+                    [ "DESCRIPTION" , string_literal ] ,
+                    "AS" , "{" , query_body , "}" ;
+param_decl        = parameter , [ "=" , value ] ;
+query_body        = statement ;   (* Tier 0 only -- §8.18.2 *)
+query_name        = string_literal ;
+
+drop_query_stmt    = "DROP" , "QUERY" , query_name ;
+drop_template_stmt = "DROP" , "TEMPLATE" , ( template_name | string_literal ) ;
+
+(* RUN of a saved query is Tier 0: it classifies as its body does (§8.18.3). *)
+run_query_stmt    = "RUN" , query_name ,
+                    [ "(" , param_bind , { "," , param_bind } , ")" ] ;
+param_bind        = parameter , "=" , value ;
 
 (* --- Workflow graph syntax --- *)
 
@@ -1531,6 +1576,166 @@ model echoing them.
 Refused inside `BATCH`, saved-query bodies, and `proposal_cal`, like every
 Tier 2/3 statement (Section 8.14.3).
 
+### 8.18 Saved queries (Tier 3 to define, Tier 0 to run -- new in 1.3)
+
+A **saved query** is a named, parameterized CAL body stored with the memory and
+executed by name. It exists so that prompt-assembly logic -- which `ASSEMBLE`
+runs on every turn, and which is edited far more often than the agent around it
+-- can live as a definition the memory carries rather than as a string literal
+compiled into a host.
+
+Versions 1.0--1.2 restricted saved-query bodies in four places (§8.14.3,
+§8.16.1, §8.17, `CAL-E125`) and made `query:<namespace>/<name>` a valid
+Recommendation `target_ref` (OMS §8.12) while defining no statement that
+creates one. This section is the missing definition; the restrictions that
+referenced it are unchanged and now have a referent.
+
+#### 8.18.1 Definitions are host metadata, not memory
+
+A saved query is **not a grain.** It is not content-addressed, it is not
+returned by `RECALL`, it does not participate in supersession, and defining one
+writes no grain. It is host metadata carried in the memory's own metadata table
+(OMS §28.4.1) under the reserved key prefix `qry:<name>`, one row per
+definition.
+
+That placement is the substantive design decision, and it is deliberate on both
+sides:
+
+- **Carried by the memory, not the client.** A saved query travels with the
+  `.mg` file. Every surface opening that memory -- CLI, MCP server, console,
+  language bindings -- sees the same set, so "which queries exist" is a
+  property of the memory rather than of whichever process happens to be asking.
+- **Not memory.** A definition is configuration. Making it a grain would put
+  editable operational config into an immutable, content-addressed,
+  replicating, erasure-relevant structure, and would put a query body into
+  every `RECALL` that did not ask for one.
+
+**Replication (normative).** Definitions MUST replicate with the memory (bundle
+and stream export/import), converging **latest-wins** on the definition's
+update time. Usage state MUST NOT replicate: a `last_run_at`-style
+last-execution stamp is a record of what one host did, not of what the
+definition *is*, and an incoming update MUST leave the local stamp intact. This
+is the same split §27.8 draws for triggers and §8.12 draws for governance
+state: **what a definition is replicates; where one host got to does not.**
+
+A point-in-time restore reconstructs grain history and MUST skip the
+definition registry -- a restore to last Tuesday is a statement about memory,
+not an instruction to revert an operator's query edits -- and MUST report that
+it did.
+
+An entry the running implementation cannot load (written by a newer revision,
+or against a limit since tightened) MUST be skipped with a warning rather than
+failing the open, and MUST be left in the file so another implementation can
+still read it.
+
+#### 8.18.2 DEFINE QUERY
+
+```sql
+DEFINE QUERY "session_prompt"($user, $session, $n = 10)
+  DESCRIPTION "standard session bootstrap"
+AS {
+  ASSEMBLE "session" FROM
+    profile: (RECALL facts  WHERE subject = $user),
+    recent:  (RECALL events WHERE session_id = $session RECENT $n)
+  BUDGET 1200 FORMAT sml
+}
+```
+
+Normative rules:
+
+1. **Bodies are Tier 0 only.** A body MUST contain exactly one statement, and
+   that statement MUST classify as Tier 0 (read). A Tier 1/2/3 statement in a
+   body is refused at definition time (`CAL-E136`). This is what makes `RUN`
+   itself a read (§8.18.3), and it is why the Tier-2/3 context restrictions
+   (§8.14.3) can name saved-query bodies without further qualification.
+2. **No recursion.** A body MUST NOT contain `RUN` (`CAL-E135`). Bodies compose
+   through subqueries and `ASSEMBLE` sources, not through each other; this
+   makes execution cost analyzable from the body's own text.
+3. **Define-time validation MUST parse the body as it would run.** An
+   implementation MUST parse the body at definition time, with the declared
+   parameters standing in at their call-site positions, and refuse a body that
+   fails (`CAL-E137`). A body whose parameter sits where the grammar demands a
+   literal (`RECENT $n`) is valid: the check substitutes before parsing, so
+   only a body that is malformed *however* it is bound is refused.
+
+   This rule is normative because of who pays for its absence. A stored query
+   that cannot parse is a latent failure whose first caller is typically an
+   unattended agent, long after its author has moved on. Validation at
+   definition time turns that into an error for the person who can still fix
+   it.
+4. **Redefinition replaces.** `DEFINE QUERY` on an existing name replaces the
+   definition and updates its revision stamp; it is not an error. There is no
+   definition history -- a saved query is configuration, and its audit trail is
+   the Recommendation lifecycle (OMS §8.12) where a governed change produced
+   it.
+5. **Authorization.** `DEFINE QUERY` and `DROP QUERY` are Tier 3 and require
+   the `admin` verb for the target namespace. A definition is executed by
+   principals who may not be permitted to write it; that gap is the point.
+6. **Verification is not one-shot.** An implementation MUST re-verify the
+   read-only property when the body executes, not only when it is defined. A
+   definition can arrive by replication from a peer running a different
+   revision, so a definition-time check alone is a check the attacker chooses
+   the timing of.
+
+**Limits.** An implementation MUST enforce, and `DESCRIBE capabilities` SHOULD
+report:
+
+| Constraint | Limit |
+|---|---|
+| Max saved queries per namespace | 100 |
+| Max query body size | 8192 bytes |
+| Max declared parameters | 10 |
+| Query name | string literal, 64 characters |
+
+Exceeding them is `CAL-E131` / `CAL-E132` / `CAL-E133`.
+
+A parameter MAY declare a default (`$n = 10`). A parameter without a default is
+required at the call site.
+
+#### 8.18.3 RUN
+
+```sql
+RUN "session_prompt"($user = "john", $session = "call-42")
+```
+
+`RUN "<name>"` binds arguments to the declared parameters and executes the
+body. A parameter with neither an argument nor a default is `CAL-E134`; an
+unknown name is `CAL-E130`.
+
+**`RUN` classifies as its body does.** Because bodies are structurally Tier 0
+(§8.18.2 rule 1, re-verified at execution by rule 6), running a saved query is
+a **read**, requires only the `read` verb, and is available wherever `RECALL`
+is. An implementation MUST NOT gate `RUN` behind the `admin` verb that
+`DEFINE QUERY` requires: defining is control, running is reading, and
+collapsing the two would make every consumer of a saved query an
+administrator.
+
+Substitution happens **before** parsing, so an implementation caching parsed
+statements by text reuses a plan per distinct argument set, and a
+zero-parameter saved query hits that cache on every call after the first.
+Values bind as values, not as text splices: a bound argument can never
+introduce a token, so no argument can change the body's classification.
+
+#### 8.18.4 DROP QUERY and DESCRIBE QUERIES
+
+```sql
+DROP QUERY "session_prompt"
+DESCRIBE QUERIES
+```
+
+`DROP QUERY` removes a definition. It is Tier 3 (`admin`), it touches no grain,
+and it is lossless against memory (§2.4). Dropping an absent name is
+`CAL-E130`.
+
+`DESCRIBE QUERIES` is Tier 0 and lists the registered definitions -- name,
+description, parameter count, body size, revision stamp, and last-execution
+stamp where the host keeps one. It is the discovery surface an agent uses to
+find what it may `RUN`.
+
+`DESCRIBE capabilities` SHOULD report saved-query support and the limits of
+§8.18.2.
+
+
 ---
 
 ## 9. Semantic Shortcuts
@@ -2339,6 +2544,10 @@ Every CAL statement maps to one or more OMS Store Protocol operations (OMS §28.
 | REVERT | 3 | 4 | `get` + `get` + `supersede` |
 | Set operation | 2 | 2 | One query per operand |
 | ASSEMBLE | N | N | N x `query`/`search` (one per source) |
+| DEFINE QUERY / DROP QUERY | 1 | 1 | `meta_put` / `meta_delete` (OMS §28.4.1) -- no grain operation |
+| DEFINE TEMPLATE / DROP TEMPLATE | 1 | 1 | `meta_put` / `meta_delete` (OMS §28.4.1) -- no grain operation |
+| RUN "<name>" | 1 | N | `meta_get` + the body's own operations |
+| DESCRIBE QUERIES / TEMPLATES | 1 | 1 | `meta_scan` (OMS §28.4.1) |
 
 ---
 
@@ -2915,7 +3124,8 @@ See [Appendix C](#appendix-c-error-code-registry) for the complete registry. Err
 | CAL-E085 -- CAL-E096 | Template | 12 |
 | CAL-E100 | Version | 1 |
 | CAL-E110, CAL-E113 | Multi-Format | 2 |
-| CAL-E121 -- CAL-E126 | Authorization (Tier 2/3, new in 1.3) | 6 |
+| CAL-E121 -- CAL-E127 | Authorization (Tier 2/3, new in 1.3) | 7 |
+| CAL-E130 -- CAL-E137 | Saved query (new in 1.3) | 8 |
 
 ### 22.3 Warning Codes
 
@@ -3028,6 +3238,13 @@ Orthogonal to Levels 1--4, the Tier 2/3 statement families are optional
   over in-memory grant grains (OMS §12.6); principal-bound sessions
   (§18.4); the governance statements (§8.16) where the host has a
   recommendation engine. Implies the grant model Tier 2 consumes.
+- **Definitions (Tier 3 to write, Tier 0 to read):** `DEFINE QUERY`/`DROP
+  QUERY`/`RUN`/`DESCRIBE QUERIES` (§8.18) and `DEFINE TEMPLATE`/`DROP
+  TEMPLATE`/`DESCRIBE TEMPLATES` (§10.6) over the memory's metadata table
+  (OMS §28.4.1), including the replication rules of §8.18.1, the
+  define-time body validation of §8.18.2, and error codes CAL-E130--E137.
+  An implementation MAY support templates without saved queries; both are
+  read surfaces at Tier 0 once defined.
 
 A Tier-0/1 implementation is not diminished by declining both modules --
 **tiers gate operations, not portability** (§2.2), and conformance claims
@@ -3287,6 +3504,32 @@ All error codes use the `CAL-E` prefix.
 | CAL-E126 | ReasonRequired — a required `BECAUSE` reason is missing or empty at execution |
 | CAL-E127 | MappingUnknown — `REHYDRATE` named a mapping id that resolves to neither a live session mapping nor a vault entry |
 
+### Saved Query Errors (CAL-E130 -- CAL-E137, new in 1.3)
+
+> **Why this block is not CAL-E053--E059.** Those codes sit in the free gap
+> between the Evolve block (ends E052) and the grain-type block (starts E060),
+> and are the natural home for a new family. They are not used here because the
+> reference implementation had already assigned CAL-E040--E059 to its template
+> and saved-query errors before this section existed, overlapping the Evolve
+> codes this registry published in 1.5 -- only CAL-E044 (`Tier1NotEnabled`)
+> agrees between the two. Codes are append-only in every registry, so neither
+> side can renumber, and putting the saved-query family at E053--E059 would
+> place it directly against the half of that implementation's block that is
+> *already* colliding. A fresh block collides with nothing, and the divergence
+> below is a defect to reconcile in the implementation rather than a
+> disagreement to encode in the registry.
+
+| Code | Description |
+|------|-------------|
+| CAL-E130 | QueryNotFound — `RUN` or `DROP QUERY` named a definition that does not exist |
+| CAL-E131 | TooManyQueries — the namespace already holds the maximum number of saved queries (§8.18.2) |
+| CAL-E132 | QueryBodyTooLarge — body exceeds the maximum body size (§8.18.2) |
+| CAL-E133 | TooManyQueryParams — more declared parameters than the maximum (§8.18.2) |
+| CAL-E134 | MissingQueryParam — a parameter with no default received no argument at the `RUN` call site |
+| CAL-E135 | RecursiveQuery — `RUN` appears inside a `DEFINE QUERY` body (§8.18.2 rule 2) |
+| CAL-E136 | QueryBodyNotReadOnly — a body contains a statement above Tier 0 (§8.18.2 rule 1) |
+| CAL-E137 | InvalidQueryBody — the body failed to parse at definition time with its parameters standing in (§8.18.2 rule 3) |
+
 ### Shortcut and Grain Type Errors (CAL-E060 -- CAL-E066)
 
 | Code | Description |
@@ -3379,7 +3622,7 @@ ADD, SUPERSEDE, REVERT, SET, REASON, BECAUSE, REHYDRATE,
 FORGET, PURGE, SUBJECT, OLDER, THAN, TYPE,
 GRANT, REVOKE, ON, TO, SHOW, GRANTS, PRINCIPAL,
 APPROVE, REJECT, APPLY, ROLLBACK, RUN, LOOP, FULL,
-STREAM, TEMPLATE, DEFINE, UNDEFINE, EXTENDS,
+STREAM, TEMPLATE, DEFINE, UNDEFINE, EXTENDS, DROP, QUERY, QUERIES, DESCRIPTION,
 HEADER, ELEMENT, ELEMENT_SUMMARY, ELEMENT_OMIT, SOURCE_BREAK, FOOTER,
 PREFERENCE, KNOWLEDGE, PERMISSION, INTERACTION, AGENCY, LIFECYCLE, OBSERVATION,
 CAL, OF
@@ -3496,7 +3739,7 @@ ROLE                                        -- DEFINE ROLE, deferred (§3.2)
 
 | Version | Date | Change |
 |---------|------|--------|
-| 1.3-draft | 2026-08-10 | **The pillar changes, on purpose and in the open.** 1.0--1.2 promised "non-destructive by grammar; no unsafe mode." The promise was true and had a hidden cost: real deployments still needed erasure -- GDPR, retention -- so destruction happened anyway, outside the language, ungoverned by any spec. Exiling destruction never prevented it; it only prevented *specifying* it. 1.3 brings it inside, where grammar bounds its shape (whole grains by hash, identity, or age -- never a predicate, never a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and the audit trail sees it (a mandatory in-memory audit Observation per Tier-2 execution). Adds the four-tier model (Core/Evolve/Destroy/Control; tiers gate operations, not portability -- §2.2), Tier 2 statements `FORGET <hash>`/`FORGET SUBJECT`/`PURGE OLDER THAN` (§8.14), Tier 3 DCL `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL` over in-memory grant grains (§8.15, OMS §12.6), Tier 3 governance statements `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP` + `DESCRIBE loop`-family (§8.16), principal-bound sessions and the credential/policy split (§18.4), authorization error codes CAL-E121--E126, and the `cal_tiers` conformance declaration. `DEFINE ROLE` reserved, deferred. The anonymization batch (2026-08-16) adds `WITH anonymize("<level>")` as a strengthen-only recall/per-source option (§8.1.2, §8.2.1), the Tier-3 `REHYDRATE` statement with its stated classification obligation (§8.17, CAL-E127), pairing OMS §10.5's pseudonymized-egress model. Every 1.0--1.2 document remains valid Tier-0/1 CAL; a session without grants is exactly the language those releases promised -- the floor, not the ceiling. |
+| 1.3-draft | 2026-08-10 | **The pillar changes, on purpose and in the open.** 1.0--1.2 promised "non-destructive by grammar; no unsafe mode." The promise was true and had a hidden cost: real deployments still needed erasure -- GDPR, retention -- so destruction happened anyway, outside the language, ungoverned by any spec. Exiling destruction never prevented it; it only prevented *specifying* it. 1.3 brings it inside, where grammar bounds its shape (whole grains by hash, identity, or age -- never a predicate, never a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and the audit trail sees it (a mandatory in-memory audit Observation per Tier-2 execution). Adds the four-tier model (Core/Evolve/Destroy/Control; tiers gate operations, not portability -- §2.2), Tier 2 statements `FORGET <hash>`/`FORGET SUBJECT`/`PURGE OLDER THAN` (§8.14), Tier 3 DCL `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL` over in-memory grant grains (§8.15, OMS §12.6), Tier 3 governance statements `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP` + `DESCRIBE loop`-family (§8.16), principal-bound sessions and the credential/policy split (§18.4), authorization error codes CAL-E121--E126, and the `cal_tiers` conformance declaration. `DEFINE ROLE` reserved, deferred. The anonymization batch (2026-08-16) adds `WITH anonymize("<level>")` as a strengthen-only recall/per-source option (§8.1.2, §8.2.1), the Tier-3 `REHYDRATE` statement with its stated classification obligation (§8.17, CAL-E127), pairing OMS §10.5's pseudonymized-egress model. The trigger batch (2026-08-19) adds `RECALL triggers` and removes the `ON "..."` workflow clause with OMS's `Workflow.trigger`. The saved-query batch (2026-08-19) adds §8.18 saved queries -- `DEFINE QUERY`/`RUN`/`DROP QUERY`/`DESCRIBE QUERIES`, Tier-0-only bodies validated at definition time, definitions as host metadata (OMS §28.4.1) rather than grains, error codes CAL-E130--E137 -- and admits `DROP` to the grammar with a closed two-target set that reaches no grain (§2.4). Every 1.0--1.2 document remains valid Tier-0/1 CAL; a session without grants is exactly the language those releases promised -- the floor, not the ceiling. |
 | 1.2 | 2026-08-03 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Also adds the **`ELEMENT` shorthand** for custom templates (Section 10.6.1): `DEFINE TEMPLATE <name> AS "<text>"` and `FORMAT TEMPLATE "<text>"`, both defined by equivalence to an `ELEMENT` section, plus the `template_shorthand` production and `"TEMPLATE" , string_literal` in `format_spec`. This also corrects two 1.1 defects in the same examples (Sections 10.1.1, 14.2.1, 27): the `TEMPLATE "..."` form they use was not admitted by the Section 4 grammar, and they interpolated bare `{{subject}}`/`{{object}}` rather than the `grain.` namespace that Section 10.5 defines and Section 10.8 closes. Backward-compatible. |
 | 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. As part of the OMS v1.4 release, also adds the Skill grain type (`0x0B`) to the closed query set (`RECALL skills` / `ADD skill`, type-specific field set, `<skill>` projection, TOON columns, `mg:capable_of` in the `AGENCY` shortcut) and corrects `belief`/`action` literals the rename left behind (`grain_type_plural`, `RECALL MY`, TOON tables, `DESCRIBE` listing, `CAL-E051`). |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |

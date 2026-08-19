@@ -9,7 +9,41 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19)
+## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query batch 2026-08-19)
+
+### Added in the saved-query batch (2026-08-19)
+
+- **CAL §8.18 Saved queries** — `DEFINE QUERY "name"($params) [DESCRIPTION …]
+  AS { body }`, `RUN "name"($p = v)`, `DROP QUERY`, `DESCRIBE QUERIES`. Answers
+  `openmemoryspec/oms#12 §1`: 1.0–1.2 restricted saved-query bodies in four
+  places (§8.14.3, §8.16.1, §8.17, `CAL-E125`) and made `query:<ns>/<name>` a
+  Recommendation target while defining no statement that creates one. Bodies are
+  **Tier 0 only**, non-recursive, and **parsed at definition time with the
+  declared parameters standing in** — a stored query that cannot run is refused
+  where it is written, not left as a landmine for an unattended first caller.
+  Defining is Tier 3 (`admin`); **running is a Tier 0 read**, because the body
+  is structurally read-only and re-verified at execution.
+- **OMS §28.4.1 Host metadata table** — `meta_get`/`meta_put`/`meta_delete`/
+  `meta_scan`, and the reserved prefix registry (`qry:`, `tpl:`, `retention:`,
+  `anon:`, `vault:`, `trg:`). §10.5.1, §10.5.2 and §27.8 already referred to
+  "reserved store-metadata prefixes"; this section is the definition they
+  referenced. Metadata rows are **not grains** — not content-addressed, not
+  returned by a read, no supersession — and replication is per-prefix with the
+  same split the trigger and governance sections draw: *what a definition is*
+  replicates, *where one host got to* does not.
+- **CAL error codes `CAL-E130`–`CAL-E137`** (saved query), and §24's
+  **Definitions module**.
+- **CAL §13 / OMS §28.9** gain the definition-surface and blob rows.
+
+### Changed in the saved-query batch (2026-08-19)
+
+- **`DROP` leaves CAL's §2.4 grammar-exclusion list**, admitted by a production
+  with a closed two-target set (`DROP TEMPLATE`, `DROP QUERY`) that reaches no
+  grain. §2.4 records why the permanence claim survives: what was permanent is
+  the exclusion of unbounded destruction *of memory*, and `DROP` was blocked as
+  the nearest available proxy for that property — this revision replaces the
+  proxy with the property. `UNDEFINE` stays reserved and unspecified rather than
+  becoming a second spelling; implementations MUST NOT accept it as an alias.
 
 ### Added in the trigger batch (2026-08-19)
 

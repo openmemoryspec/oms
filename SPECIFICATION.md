@@ -1130,7 +1130,7 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 
 **Required fields:**
 - `type` = "recommendation"
-- `target_ref` (string) — the change target as `<scheme>:<opaque>`. Standard schemes: `grain:sha256:<hash>` (a specific grain), `entity:<namespace>/<subject>` (an entity), `query:<namespace>/<name>` (a saved query), `template:<namespace>/<name>` (a template), `doc:<host-id>` (a host document, e.g. `doc:claude.md`), `host:<opaque>` (an opaque host object). The scheme is the target-kind discriminator; the scheme set is open for host-defined targets.
+- `target_ref` (string) — the change target as `<scheme>:<opaque>`. Standard schemes: `grain:sha256:<hash>` (a specific grain), `entity:<namespace>/<subject>` (an entity), `query:<namespace>/<name>` (a saved query, CAL §8.18), `template:<namespace>/<name>` (a template, CAL §10.6), `doc:<host-id>` (a host document, e.g. `doc:claude.md`), `host:<opaque>` (an opaque host object). The scheme is the target-kind discriminator; the scheme set is open for host-defined targets.
 - `analyzer` (map) — the producing logic: `{id: string, params?: map}`, where `id` is a versioned identifier `publisher.name/major` (e.g. `"waiser.duplicate_sweep/1"`) and `params` is an optional snapshot of the parameters it ran with. Full "why" provenance without a second grain.
 - `summary` (map) — a deterministic, template-rendered description: `{template_id: string, args: map}`. An analyzer MUST NOT store free prose here; the human-readable string is produced by rendering `template_id` with `args`, so summaries stay reproducible and translatable.
 - `dedup_key` (string) — the recommendation's stable proposal identity, computed (never author-chosen) per normative rule 5. Two recommendations with the same `dedup_key` are the same proposal; a supersession chain (evidence refresh, a growing cluster) shares one `dedup_key` across all of its content addresses.
@@ -3326,6 +3326,77 @@ OMS does not define a formal store API. However, implementations that expose a p
 
 Stores SHOULD implement `supersede` as a distinct operation rather than exposing raw `put` + index mutation separately. Supersession is the most error-prone operation (invalidation policy checks, derivation DAG traversal for `scope: "subtree"`, atomic index update) and deserves a dedicated, well-tested code path.
 
+### 28.4.1 Host metadata table (new in 1.6)
+
+Every operation in §28.4 addresses a grain. A memory also carries a small
+amount of state that is **not** memory: declarations about the file itself, and
+definitions an operator authored so they travel with it. Sections 10.5.1,
+10.5.2 and §27.8 already refer to "reserved store-metadata prefixes" without
+this specification saying what a store-metadata row *is*. This section defines
+it.
+
+A conforming store that offers a programmatic interface SHOULD expose a
+**metadata table**: a flat, string-keyed, string-valued map stored in the
+memory alongside its grains.
+
+| Operation | Signature | Description |
+|---|---|---|
+| `meta_get` | `(key) → value \| not_found` | Read one metadata row |
+| `meta_put` | `(key, value) → void \| error` | Create or replace one row. Replacing a row overwrites it; there is no metadata history |
+| `meta_delete` | `(key) → void \| error` | Remove one row |
+| `meta_scan` | `(key_prefix) → [(key, value)]` | Enumerate rows under a prefix |
+
+**Normative rules:**
+
+1. **Metadata rows are not grains.** They are not content-addressed, they do
+   not appear in `query`/`search` results, they do not supersede, they carry no
+   provenance, and writing one does not change any content address. An
+   implementation MUST NOT surface metadata rows through a grain read.
+2. **Rows are per-memory.** The isolation unit for metadata is the memory that
+   holds it, exactly as for grains.
+3. **The prefix registry below is closed to implementations.** A prefix listed
+   there carries the stated semantics; an implementation MUST NOT repurpose
+   one. Unlisted prefixes are available for host use and need no registration,
+   but an implementation MUST preserve rows it does not recognize rather than
+   dropping them on rewrite -- a memory is routinely opened by more than one
+   implementation and by more than one version of the same one.
+4. **Replication is per-prefix, and the default is "does not replicate".** A
+   metadata row replicates only where its prefix says so. The distinction the
+   registry encodes throughout is: **what a definition or declaration *is* may
+   replicate; a record of where one host got to MUST NOT.** A peer receiving
+   another host's cursor, lock, or usage counter would act on a position it
+   never occupied.
+5. **Point-in-time restore skips metadata**, and MUST report that it did. A
+   restore reconstructs grain history; it is not an instruction to revert an
+   operator's configuration to what it was on the restore date.
+6. **An unloadable row is skipped, warned, and kept.** A row written by a newer
+   revision, or one that no longer satisfies a since-tightened limit, MUST NOT
+   fail the open. The implementation skips it, reports it through whatever channel
+   it reports open-time warnings on, and leaves it in the file so an implementation that
+   can read it still can. Overwriting the row is what loses it.
+
+**Reserved prefix registry:**
+
+| Prefix | Holds | Replicates | Defined in |
+|---|---|---|---|
+| `qry:<name>` | A saved query definition | Yes — latest-wins on the definition's update time | CAL §8.18 |
+| `tpl:<name>` | A custom output template definition | Yes — latest-wins on the definition's update time | CAL §10.6 |
+| `retention:<namespace>` | A declarative retention policy | Yes — write-if-absent | §10.5.1 (same rule) |
+| `anon:<namespace>` | A pseudonymized-egress policy | Yes — write-if-absent | §10.5.1 |
+| `vault:<namespace>:<placeholder>` | A sealed placeholder→value mapping | **Never, in either direction** | §10.5.2 |
+| `trg:<trigger>` | Per-host trigger evaluation state (baselines, cursors, dedup keys) | **No** — host-local by §27.8 | §27.8 |
+
+Rows that record *usage* rather than definition — a last-execution stamp on a
+saved query, a last-evaluated stamp on a trigger — MUST NOT replicate even when
+they ride a replicating prefix, and an incoming update MUST leave the local
+value intact.
+
+**File-truth rows.** A store MAY also keep rows describing capabilities the
+file was written with (whether text is indexed, whether entity relations are
+extracted, embedding provenance). These are infrastructure truths about one
+copy, and they MUST NOT replicate: a peer that cannot build a text index does
+not acquire one by importing a bundle that says it has one.
+
 ### 28.5 Agent Capability Convention
 
 Agents that participate in multi-agent systems SHOULD advertise their capabilities by writing a Fact grain with the `mg:has_capability` relation to the `"agent:identity"` namespace. This grain serves as the OMS equivalent of an A2A Agent Card or MCP server capability declaration.
@@ -3495,6 +3566,10 @@ CAL extends the store operations defined in §28.4 with a structured query langu
 | `query`/`search` + `get_batch` + compose | `ASSEMBLE … FROM … BUDGET <n> TOKENS` |
 | introspection | `DESCRIBE <type>` |
 | `delete` (compliance erasure) | `FORGET <hash>` / `FORGET SUBJECT` / `PURGE OLDER THAN` (Tier 2, authorization-gated, audited — CAL §8.14; no CAL equivalent on Tier-0/1 hosts) |
+| `meta_put` / `meta_delete` (§28.4.1) | `DEFINE QUERY` / `DROP QUERY` (CAL §8.18), `DEFINE TEMPLATE` / `DROP TEMPLATE` (CAL §10.6) — definitions, not grains |
+| `meta_get` + the body's own operations | `RUN "<name>"` (CAL §8.18.3) |
+| `meta_scan` (§28.4.1) | `DESCRIBE QUERIES` / `DESCRIBE TEMPLATES` |
+| `put_blob` / `get_blob` (§28.4) | No CAL equivalent — CAL addresses grains; blob bytes reach a caller through the host API (§7.1) |
 
 **SML output format:**
 
