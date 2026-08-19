@@ -9,6 +9,312 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
+## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query, template-identity, blob-lifecycle, subject-reachability, mail-profile and housekeeping batches 2026-08-19)
+
+### Added in the saved-query batch (2026-08-19)
+
+- **CAL §8.18 Saved queries** — `DEFINE QUERY "name"($params) [DESCRIPTION …]
+  AS { body }`, `RUN "name"($p = v)`, `DROP QUERY`, `DESCRIBE QUERIES`. Answers
+  `openmemoryspec/oms#12 §1`: 1.0–1.2 restricted saved-query bodies in four
+  places (§8.14.3, §8.16.1, §8.17, `CAL-E125`) and made `query:<ns>/<name>` a
+  Recommendation target while defining no statement that creates one. Bodies are
+  **Tier 0 only**, non-recursive, and **parsed at definition time with the
+  declared parameters standing in** — a stored query that cannot run is refused
+  where it is written, not left as a landmine for an unattended first caller.
+  Defining is Tier 3 (`admin`); **running is a Tier 0 read**, because the body
+  is structurally read-only and re-verified at execution.
+- **OMS §28.4.1 Host metadata table** — `meta_get`/`meta_put`/`meta_delete`/
+  `meta_scan`, and the reserved prefix registry (`qry:`, `tpl:`, `retention:`,
+  `anon:`, `vault:`, `trg:`). §10.5.1, §10.5.2 and §27.8 already referred to
+  "reserved store-metadata prefixes"; this section is the definition they
+  referenced. Metadata rows are **not grains** — not content-addressed, not
+  returned by a read, no supersession — and replication is per-prefix with the
+  same split the trigger and governance sections draw: *what a definition is*
+  replicates, *where one host got to* does not.
+- **CAL error codes `CAL-E130`–`CAL-E137`** (saved query), and §24's
+  **Definitions module**.
+- **CAL §13 / OMS §28.9** gain the definition-surface and blob rows.
+
+### Changed in the saved-query batch (2026-08-19)
+
+- **`DROP` leaves CAL's §2.4 grammar-exclusion list**, admitted by a production
+  with a closed two-target set (`DROP TEMPLATE`, `DROP QUERY`) that reaches no
+  grain. §2.4 records why the permanence claim survives: what was permanent is
+  the exclusion of unbounded destruction *of memory*, and `DROP` was blocked as
+  the nearest available proxy for that property — this revision replaces the
+  proxy with the property. `UNDEFINE` stays reserved and unspecified rather than
+  becoming a second spelling; implementations MUST NOT accept it as an alias.
+
+### Fixed in the housekeeping batch (2026-08-19)
+
+Answers `openmemoryspec/oms#12 §7`.
+
+- **`mg:step_action:<node_id>` joins the relation vocabularies** (OMS §8, CAL
+  §7.1). It was used normatively in §8.4 while appearing in no vocabulary list,
+  so a conformant validator warned `CAL-W001` — "unknown `mg:` relation" — on
+  this specification's own relation. It is the first **parameterized** standard
+  relation (the node id is part of the value), so CAL §7.3 now states the
+  matching rule: parameterized rows match by prefix, everything else by exact
+  value.
+- **CAL §14.3 had two disclosure models and admitted one.** The grammar has read
+  `disclosure_level = "summary" | "headlines" | "full"` since 1.0, against a
+  §14.3 table naming `summary | standard | full`. They were never the same
+  control: one is **metadata density** (how many attributes an element carries),
+  the other is **body extent** (how much free text survives). §14.3 now
+  documents both axes and how they compose, including that `full` is *additive*
+  — it carries a Skill's `instructions`/`when_to_use`, which no other level
+  does at any budget — and that omitting the option is **not** a level but a
+  request to leave each format's established output alone.
+- **Version markers reconciled.** `SPECIFICATION.md`'s footer said "the v1.5
+  revision" under a 1.6-draft header; it now describes the 1.6 draft, and the
+  byte-range sentence reads `0x01`–`0x0C` unchanged (Trigger takes `0x0D`).
+  Footer dates across all three documents moved to 2026-08-19.
+- **Duplicate section number `§6.14`.** The trigger batch added "§6.14
+  Trigger-Specific Fields" without renumbering the "§6.14 Compaction Rules" that
+  followed it — the same bump the Recommendation type did on its way in.
+  Compaction Rules is now §6.15; nothing referenced it by number.
+- **`CONTRIBUTING.md` pointed at `oms-specification.md`**, a file that has never
+  existed in this repository. The checklist now names the three documents that
+  do, and asks for the changelog entry.
+
+### Added in the mail-profile batch (2026-08-19)
+
+- **OMS Appendix A.8 Mail Profile (`mail:`)** — `mail:message_id`,
+  `mail:in_reply_to`, `mail:references`, `mail:from`/`to`/`cc`/`bcc`,
+  `mail:subject`, `mail:date`, `mail:folder`, `mail:direction`,
+  `mail:transport`, plus a normative RFC 5322 → OMS field mapping. Event grains
+  model LLM turns — `role` is a chat enum — and nothing in the specification
+  named a sender, recipient, subject line or `Message-ID`, so every mail-shaped
+  agent invented its own `context` keys and lost portability on exactly the
+  grains most worth porting. Answers `openmemoryspec/oms#12 §3` by its option
+  (a). Option (b), a first-class `thread_id` common field, was **rejected**: it
+  adds a compact key to a normative frozen field map for a concept `session_id`
+  already carries. The thread *is* the session (§28.6); `In-Reply-To` maps to
+  both `parent_message_id` (the parent grain's content address) and
+  `mail:in_reply_to` (the transport id — the only form available when the
+  parent was never ingested).
+- Two prohibitions carry privacy weight: `mail:message_id` MUST NOT be used as
+  or derived into a content address, and `mail:bcc` MUST NOT be populated from a
+  *received* message. A correspondent an agent asserts facts about SHOULD also
+  appear in `subject`, because §28.4.4 reaches structured references — a person
+  reachable only through a `context` key is not reachable by erasure or DSAR.
+- **CAL `domain_prefix` admits `mail`** — the production is closed by design (an
+  open prefix would turn every misspelled field into a valid domain field
+  instead of `CAL-E004`), so a new OMS profile needs this CAL change to be
+  queryable.
+- **Status:** this is the one part of the 1.6 draft written *ahead of* a
+  reference implementation rather than from working code, and it says so in the
+  spec. The field set is a starting point for comment.
+
+### Added in the subject-reachability batch (2026-08-19)
+
+- **OMS §28.4.4 Subject reachability** — prior revisions defined the erasure
+  selector without ever saying what it must **reach**, and a conforming
+  implementation was found to under-erase silently because of it: a grain
+  carrying a `subject` but no relation or object reached no structural index, so
+  the identity's own transcript survived an erasure **that reported success**
+  and went undisclosed in a DSAR **that reported completeness**. Now normative:
+  reachability is a property of the identity, not of grain shape; reach extends
+  to object position, session/run keys and partition-key derivatives; **erasure
+  and disclosure MUST share one selector**; a known-incomplete scope MUST NOT
+  report success; a reachability fix MUST heal existing memories by index
+  rebuild rather than only indexing correctly going forward; residual limits
+  MUST be documented. Carries a **required conformance case** — store a grain
+  with only a subject, assert it is reported and then erased. Answers
+  `openmemoryspec/oms#12 §6`.
+- **CAL §8.19 `REPORT SUBJECT`** — the read-only mirror of `FORGET SUBJECT`,
+  and the statement §28.4.4 rule 3 is about. Tier 0, `read` verb, same selector
+  and same `WITH text_mentions` precondition as the erasure. It MUST NOT sit
+  behind the cap that disables destructive operations — a deployment that turned
+  destruction off still owes data subjects access — and it writes **no** audit
+  grain: access destroys nothing, and an audit grain naming the subject of a
+  DSAR would itself be personal data about them in an immutable replicating
+  store. GDPR Art. 15/20 in §19.2 now point at it instead of at a `RECALL`
+  approximation.
+
+### Added in the blob-lifecycle batch (2026-08-19)
+
+- **OMS §7.1.1 the `cas:` URI scheme** — `cas://sha256:<64-hex>`, used once as
+  an example URI since 1.0 and never defined. The address is the SHA-256 of the
+  **plaintext** bytes (so content addresses identically in an encrypted memory
+  and a plaintext one), a reader MUST verify it, resolution is memory-local and
+  never a network fetch, a reference is **not** a promise of presence, and a
+  malformed address fails closed before any lookup. Answers
+  `openmemoryspec/oms#12 §5`.
+- **OMS §28.4 `put_blob` / `get_blob`** — the operation table was grains-only.
+  `put_blob` is idempotent by construction (the address *is* the content);
+  `get_blob` verifies the digest before returning bytes.
+- **OMS §28.4.2 Blob concurrency** — a blob read needs no lock, because an
+  immutable object whose address is its checksum poses no consistency question.
+  Stated normatively because the alternative starves real callers: where a
+  memory lock is exclusive, a run holding the memory would otherwise block the
+  subprocess it spawned to process an attachment, for a lock protecting nothing.
+- **OMS §28.4.3 Blob lifecycle under erasure** — the GDPR-grade half.
+  Sole-referenced attachments MUST be reclaimed by subject erasure; reclamation
+  MUST be **targeted, never a store-wide sweep** (a census races an upload that
+  has happened while its referencing grain has not, and collecting it destroys
+  an unrelated caller's data); the surviving-reference check MUST run under the
+  erasure's own serialization; the report MUST count reclaimed blobs separately;
+  and crypto-erasure MUST reach blobs, since encrypting the database while
+  leaving attachments in the clear beside it encrypts the index and publishes
+  the documents. The byte-identical-concurrent-upload window is stated rather
+  than implied.
+- **CAL §8.14.1** carries the same obligation onto `FORGET SUBJECT`.
+
+### Added in the template-identity batch (2026-08-19)
+
+- **OMS §28.4.1 definition identity** — every stored definition (`qry:`, `tpl:`)
+  carries **two** stamps that an implementation MUST NOT collapse: `updated_at`
+  (the latest-wins replication tiebreaker and the "when did this change") and
+  `definition_hash` (SHA-256 over the NFC-normalized body — the stable identity
+  of *this* revision). Neither substitutes for the other: a timestamp cannot
+  identify a revision (two hosts editing to the same body get different stamps
+  for identical content), and a hash cannot order revisions. Answers
+  `openmemoryspec/oms#12 §2`.
+- **CAL §10.6.3 Template identity, revision, and `DROP TEMPLATE`** — templates
+  are stored definitions under `tpl:<name>` on §8.18.1's terms; both stamps are
+  reported by `DESCRIBE TEMPLATES`; built-ins are code, not metadata, and are
+  neither droppable nor persistable; dropping a template another template
+  `EXTENDS` is refused rather than left dangling.
+- **`template:<ns>/<name>@<definition_hash>`** — Recommendation targets may be
+  revision-qualified, and a Recommendation applied to a definition MUST record
+  the **replaced body** on its applied audit grain, so its inverse reinstates
+  the revision it displaced rather than "whatever was there before". §8.12
+  rule 4 additionally asks `summary.template_id` to carry its revision: a bare
+  name renders a summary whose text can silently change after a reviewer
+  approved it.
+
+### Added in the trigger batch (2026-08-19)
+
+- **OMS §8.13 Trigger (type `0x0D`)**: a standing rule that starts a Workflow —
+  interval, calendar schedule, one-shot, polling an external source, a condition
+  over this memory, a host-delivered webhook, a manual dispatch, or a boolean
+  gate over other triggers. Typed, queryable fields; connector transport
+  configuration stays in `config` under the §A.7 `int:` keys. Binding is
+  normatively **trigger → workflow**: a Workflow is content-addressed, so a plan
+  accumulating trigger references would change address whenever one was added.
+- **OMS §27.8 Trigger Execution Contract**: what an implementation that
+  *evaluates* triggers must do — journal every firing, deduplicate on the
+  declared key, seed rather than replay history on first evaluation, keep
+  evaluation state host-local, arbitrate concurrent evaluation through the
+  store, back off on failure, and state its DST semantics rather than assume
+  them. Answers `openmemoryspec/oms#12 §4`.
+- **OMS §17.4 Optional modules** and the `triggers` module declaration,
+  mirroring CAL's tier modules: modules gate operations, not portability.
+- **§A.7 `int:allowed_outbound_hosts`**: the destinations a connector may reach.
+- **CAL: `RECALL triggers`** — the closed grain-type set grows to 13, with a
+  queryable field set (`kind`, `workflow`, `connector`, `scope`, `enabled`,
+  `cron`).
+
+### Removed in the trigger batch (2026-08-19)
+
+- **OMS §27.6 "Trigger Definitions via Observation Grains"** — removed, not
+  deprecated. It was non-conformant against this specification's own closed
+  enums (§25 `observation_mode`, §26 `observation_scope`), its `context`-carried
+  configuration could not be queried, and §24's observer domains have no bucket a
+  standing rule belongs in. Keeping text that instructs implementers to write
+  invalid grains is worse than removing it. §8.13 replaces it, and §27.6 carries
+  a migration note.
+- **`Workflow.trigger` (§8.4)** — **breaking.** A free-text "activation
+  condition" that no implementation evaluated, so it described an activation
+  that could not activate anything. Old blobs are unaffected: an unknown field
+  is preserved and ignored (§19.4). CAL's `ON "…"` clause on `ADD`/`SUPERSEDE
+  workflow` goes with it; `ON` remains a keyword, used by `GRANT`/`REVOKE`.
+
+### Added in the anonymization batch (2026-08-16)
+
+- **OMS §10.5 Pseudonymized Egress**: the placeholder disclosure model for
+  external models; the reserved `anon:<namespace>` policy prefix
+  (write-if-absent replication, fail-closed unreadable rows,
+  minimum-reader-version stamping, keyed value-derived pseudonyms only on
+  encrypted files); the reserved never-replicating `vault:` prefix (sealed
+  under a file-key-derived subkey, erased with the subject, revealed only
+  under grant + fingerprint-only audit); the `anonymized` response report
+  (mapping ids only).
+- **CAL §8.1.2 / §8.2.1 `WITH anonymize("<level>")`**: strengthen-only, on
+  RECALL and per-ASSEMBLE-source — the file-declared policy remains the
+  gate; query text can only add severity.
+- **CAL §8.17 `REHYDRATE`** (Tier 3): the round trip's return leg;
+  classification stated (re-identification is never a plain read), gated,
+  audited by fingerprint; `CAL-E127 MappingUnknown`.
+
+> This entry describes a **draft**. The `release/oms-v1.6` branch is the
+> comment window; nothing below is normative until release.
+
+### CAL 1.3 — the pillar changes, on purpose and in the open
+
+CAL 1.0–1.2 promised "non-destructive by grammar; no unsafe mode." The
+promise was true and had a hidden cost: real deployments still needed
+erasure — GDPR, retention — so destruction happened anyway, outside the
+language, ungoverned by any spec. Exiling destruction never prevented it; it
+only prevented *specifying* it. 1.3 brings it inside, where grammar bounds
+its shape (whole grains by hash, identity, or age — never a predicate, never
+a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and
+the audit trail sees it. Every 1.0–1.2 document remains valid Tier-0/1 CAL;
+for any session without grants, CAL is still exactly the language those
+releases promised — now the shared floor, not a ceiling that pushed
+dangerous operations off the books.
+
+#### CAL 1.3 — Added
+
+- **Four-tier capability model** (§2.2): Tier 0 Core, Tier 1 Evolve, Tier 2
+  Destroy, Tier 3 Control. **Tiers gate operations, not portability** —
+  interop rides the `.mg` file and Tier-0 reads; a read-only implementation
+  remains fully conformant forever. New `cal_tiers` conformance declaration;
+  `DESCRIBE capabilities` reports the host's tiers.
+- **Tier 2 — Destroy** (§8.14): `FORGET <hash>` (reason optional but
+  recorded), `FORGET SUBJECT <id> [WITH text_mentions] BECAUSE "…"`, and
+  `PURGE OLDER THAN <duration> [TYPE <t>] BECAUSE "…"`. Requires the
+  `delete`/`erase` verbs; fail-closed; one-way; every execution writes an
+  in-memory audit Observation (§8.14.4) following the §8.12.1 audit pattern.
+- **Tier 3 — Control** (§8.15): `GRANT`/`REVOKE` verbs on a namespace for a
+  principal, `SHOW GRANTS`, `DESCRIBE PRINCIPAL` — over grant grains stored
+  in the memory itself (OMS §12.6). `REVOKE` is retraction-by-supersession;
+  grant history is append-only. `DEFINE ROLE` reserved, deferred.
+- **Tier 3 — Governance** (§8.16): `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`
+  with `BECAUSE` mandatory as *syntax*, `RUN LOOP [FULL]`, and the
+  `DESCRIBE loop|analyzers|outcomes|policy` reads. Self-approval refused
+  against the creating actor and the triggering principal; observer type
+  derives from the principal's host record, never statement text; refused
+  inside `BATCH`, saved queries, and `proposal_cal`. Loop *policy* writes
+  stay permanently outside CAL (self-licensing).
+- **Principal-bound sessions and the credential/policy split** (§18.4):
+  hosts authenticate and resolve principals; grants resolve from the
+  memory; credentials never enter grains or statements; owner sessions
+  preserve the single-operator experience.
+- **Authorization error codes** CAL-E121–E126, with CAL-E121 messages
+  naming the missing verb and the `GRANT` that would confer it.
+
+#### CAL 1.3 — Changed
+
+- §2 Safety Model restated (see narrative above); `FORGET`/`PURGE` and
+  `GRANT`/`REVOKE` moved from the blocked-token list to tier-gated
+  keywords. `DELETE`, `ERASE`, `DESTROY`, `TRUNCATE` and all key/credential
+  vocabulary remain permanently excluded.
+
+### OMS 1.6 — Added
+
+- **§12.6 Authorization**: principals (humans and agents uniformly, DIDs as
+  the signed upgrade path), the closed verb set, namespace-scoped grants;
+  **grant grains** — Facts in the new reserved `agent:authz` namespace
+  (subject = grantee, `mg:permits`, canonical object string, grantor/reason
+  in `context`); effective rights = live heads, fail-closed; revocation by
+  retraction-by-supersession (`mg:revokes` stays consent-domain); owner
+  bootstrap; grants replicate as sync while authoring requires
+  `admin`/owner; the credential/policy split.
+
+### OMS 1.6 — Changed
+
+- §28.4 `delete`: may surface to authorized principals via CAL Tier 2; gains
+  the one-way rule (additions roll back by retraction; erasure is final).
+- §28.9: the "no CAL equivalent — structurally excluded" row now maps to
+  Tier-2 `FORGET`/`PURGE` on hosts that implement them.
+- §8.12 `proposal_cal`: MAY carry Tier-2 statements where the host
+  authorizes destructive proposals (apply recorded not rollbackable);
+  governance statements refused unconditionally.
+
+---
+
 ## [1.5] — 2026-08-03
 
 ### Added

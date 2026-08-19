@@ -1,8 +1,8 @@
 # Open Memory Specification (OMS)
 ## Memory Grain (.mg) Container Definition
 
-**Version:** 1.5
-**Status:** Standards Track
+**Version:** 1.6-draft
+**Status:** Draft for Comment (OMS 1.6 RFC) — changed sections are normative only upon release
 **Category:** Data Formats
 **Date:** August 2026
 **Copyright:** Public Domain (CC0 1.0 Universal)
@@ -209,7 +209,8 @@ Hexadecimal values are lowercase. Byte sequences are represented in hex with spa
 | 0x0A | **Consent** | Permission grant or withdrawal — DID-scoped, purpose-bounded |
 | 0x0B | **Skill** | Packaged, reusable agent capability — definition (how-to, tools, resources) plus optional learned proficiency |
 | 0x0C | **Recommendation** | Governed, auditable proposal to change memory or agent configuration — reviewed, applied, and rollback-able |
-| 0x0D–0xEF | Reserved | Future standard types |
+| 0x0D | **Trigger** | Standing rule that starts a Workflow — an interval, a schedule, a source to poll, a condition to watch |
+| 0x0E–0xEF | Reserved | Future standard types |
 | 0xF0–0xFF | Domain profile types | Application-defined per Appendix A domain profiles |
 
 **Bytes 3-4 — Namespace Hash:** First two bytes of SHA-256(namespace), encoded as `uint16` big-endian. Provides 65,536 routing buckets without deserialization. Full namespace string remains authoritative in payload. This field is a routing hint only and MUST NOT be used for security decisions (see §13.3, §20).
@@ -503,7 +504,6 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 
 | Full Name | Short Key | Type | Notes |
 |-----------|-----------|------|-------|
-| `trigger` | `trigger` | string | Activation condition |
 | `nodes` | `nodes` | array[string] | Graph node IDs/labels |
 | `edges` | `edges` | array[map] | Directed edges (see §8.4 edge schema) |
 | `bindings` | `bind` | map[string→string] | Node ID → Tool definition grain hash |
@@ -679,7 +679,35 @@ When a Goal or Fact grain uses the `mg:delegates_to` relation, the following fie
 | `metric_snapshot` | `msnap` | map |
 | `evidence_query` | `evq` | string |
 
-### 6.14 Compaction Rules
+### 6.14 Trigger-Specific Fields
+
+| Full Name | Short Key | Type | Notes |
+|-----------|-----------|------|-------|
+| `kind` | `aknd` | string | Shared with Tool's `kind` — same field name, same short key; the type byte disambiguates the value space |
+| `workflow` | `twf` | string | Content address of the Workflow this trigger starts |
+| `connector` | `tcon` | string | |
+| `scope` | `tscp` | string | |
+| `enabled` | `tena` | bool | **Always emitted**, unlike most defaulted booleans — see below |
+| `dedup_key` | `tdk` | array[string] | |
+| `interval_secs` | `tint` | int | |
+| `cron` | `tcron` | string | |
+| `at_ms` | `tat` | int64 | |
+| `predicate` | `tpred` | map | Inner keys are the expression's own and are NOT compacted |
+| `members` | `tmem` | map[string→string] | Alias → trigger content address |
+| `correlate` | `tcorr` | string | |
+| `window_ms` | `twin` | int64 | |
+| `concurrency` | `tconc` | string | |
+| `catchup` | `tcatch` | string | |
+| `config` | `tcfg` | map | `int:` keys compact per §A.7; connector-specific keys stay verbatim |
+
+> **`enabled` is a deliberate exception to omit-when-default.** Omitting a
+> defaulted value exists to keep *pre-existing* blobs byte-identical across a
+> rollout, and a newly registered type has none. Omitting it would instead break
+> the most natural query over triggers — selecting the live ones — because the
+> field would be absent on every one of them. A type whose fields are declared
+> so they can be queried must not then hide the field people query by.
+
+### 6.15 Compaction Rules
 
 - Serializers MUST replace full field names with short keys before encoding
 - Deserializers MUST replace short keys with full field names after decoding
@@ -715,6 +743,52 @@ Multi-modal content (images, audio, video, embeddings, sensor data) is reference
 | `size_bytes` | `sz` | int | OPTIONAL | File size in bytes |
 | `checksum` | `ck` | string | RECOMMENDED | SHA-256 hash for integrity |
 | `metadata` | `md` | map | OPTIONAL | Modality-specific metadata |
+
+### 7.1.1 The `cas:` URI scheme (new in 1.6)
+
+`cas://sha256:<64-lowercase-hex>` addresses bytes held in a **content-addressed
+store** that the memory owns. Prior revisions used the scheme once, as an
+example URI in §7.1, and never defined it. This section does.
+
+```
+cas://sha256:a0864a70f3c1b9e2…      (exactly 64 lowercase hex characters)
+```
+
+**Normative rules:**
+
+1. **The address is the SHA-256 of the plaintext bytes.** Not of a stored,
+   compressed, or encrypted representation. A store that encrypts blobs at rest
+   MUST keep the address over the clear bytes, so the same content addresses
+   identically in an encrypted memory and a plaintext one. An address that
+   changed when a memory was encrypted would break every `content_refs` entry
+   pointing at it and would make `checksum` (§7.1) disagree with `uri` for no
+   semantic reason.
+2. **The address is a claim about the bytes, so a reader MUST check it.**
+   `get_blob` (§28.4) MUST verify the digest of the bytes it returns against the
+   address it was given and fail rather than return bytes that do not match.
+   Where blobs are sealed, the AEAD tag and the content address are independent
+   checks and an implementation SHOULD perform both — they fail on different
+   attacks.
+3. **Resolution is memory-local.** `cas://` names content in *this* memory's
+   store; it is not a network locator and MUST NOT be dereferenced by fetching a
+   URL. A grain that travels to a peer carries the address, and the peer
+   resolves it against its own store or reports it missing. Blobs do not
+   replicate implicitly with grains — an implementation that ships attachments
+   alongside a bundle MUST do so as an explicit part of that transfer.
+4. **A `cas://` reference is not a promise of presence.** Erasure (§28.4.3),
+   selective transfer, and partial imports all produce a memory that holds a
+   grain whose attachment is gone. Readers MUST treat a missing blob as an
+   expected outcome, not as corruption.
+5. **Malformed addresses fail closed.** An address that is not exactly
+   `cas://sha256:` followed by 64 hex characters MUST be rejected as invalid
+   input before any lookup. Addresses arrive from imported grains and from
+   callers; length-validating after slicing is how a truncated URI becomes a
+   panic.
+
+When `uri` is a `cas://` address, `checksum` (§7.1) is redundant with it: the
+address *is* the checksum. Implementations MAY populate both, and MUST reject
+the entry as malformed if they disagree.
+
 
 ### 7.2 Embedding Reference Schema
 
@@ -787,8 +861,8 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:state_at` | State | Agent state snapshot |
 | `mg:has_graph` | Workflow | Directed graph of procedural steps |
 | `mg:intends` | Goal | Agent objective |
-| `mg:permits` | Consent | User grants agent right to retain or act |
-| `mg:revokes` | Consent | User revokes prior consent |
+| `mg:permits` | Consent, Fact | User grants agent right to retain or act (Consent); as a Fact in `agent:authz`, an authorization grant (§12.6.2) |
+| `mg:revokes` | Consent | User revokes prior consent (data-subject domain only — authorization revocation is retraction-by-supersession, §12.6.3) |
 | `mg:prohibits` | Fact/Goal | Hard prohibition |
 | `mg:requires` | Fact/Goal | Hard requirement |
 | `mg:prefers` | Fact | Soft preference |
@@ -800,6 +874,20 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:depends_on` | Goal | Task dependency (distinct from `parent_goals` hierarchy) |
 | `mg:assigned_to` | Goal | Task assigned to agent for execution |
 | `mg:capable_of` | Skill | Learned skill with proficiency and strategies (§8.11; legacy Fact convention retained for back-compat) |
+| `mg:step_action:<node_id>` | Tool | Execution record linking a Tool grain to the Workflow node it ran (§8.4). **Parameterized** — see below |
+
+**Parameterized relations.** `mg:step_action:<node_id>` is the first standard
+relation whose full value is not a fixed string: the node identifier is part of
+it, so the vocabulary above lists a *prefix* rather than a member. It was used
+normatively in §8.4 from the revision that introduced it while appearing in no
+vocabulary list, which made a conformant validator warn (CAL-W001, "unknown
+`mg:` relation") on this specification's own relation.
+
+Validators MUST therefore match `mg:` relations against the vocabulary by
+**prefix where a row is marked parameterized**, and exact value otherwise.
+Implementations that index relations by exact value need a prefix scan to find
+these; that is a consequence of parameterizing a relation, and the reason no
+other standard relation does it.
 
 ### 8.1 Fact (type = 0x01)
 
@@ -849,7 +937,6 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 - `created_at` (int64, epoch ms)
 
 **Optional fields:**
-- `trigger` (string) — condition that activates this workflow
 - `edges` (array[map]) — directed edges between nodes (see edge schema below). When absent, nodes are unconnected.
 - `bindings` (map[string→string]) — maps node IDs to Tool definition grain hashes (`tool_phase: "definition"`). Unbound nodes are resolved by convention (tool name match) or treated as abstract steps.
 - `retries` (map[string→int]) — maps node IDs to maximum repeat count on failure. Absent means no retry.
@@ -894,7 +981,6 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 ```json
 {
   "type": "workflow",
-  "trigger": "merge to main",
   "nodes": ["build", "test", "deploy"],
   "edges": [
     {"src": "build", "dst": "test"},
@@ -909,7 +995,6 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 ```json
 {
   "type": "workflow",
-  "trigger": "PR opened",
   "nodes": ["lint", "security", "compliance", "evaluate"],
   "edges": [
     {"src": "lint", "dst": "security"},
@@ -926,7 +1011,6 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 ```json
 {
   "type": "workflow",
-  "trigger": "release requested",
   "nodes": ["build", "unit_test", "lint", "integration_test", "stage_deploy", "approval", "prod_deploy", "rollback", "notify"],
   "edges": [
     {"src": "build", "dst": "unit_test"},
@@ -1106,12 +1190,12 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 
 **Required fields:**
 - `type` = "recommendation"
-- `target_ref` (string) — the change target as `<scheme>:<opaque>`. Standard schemes: `grain:sha256:<hash>` (a specific grain), `entity:<namespace>/<subject>` (an entity), `query:<namespace>/<name>` (a saved query), `template:<namespace>/<name>` (a template), `doc:<host-id>` (a host document, e.g. `doc:claude.md`), `host:<opaque>` (an opaque host object). The scheme is the target-kind discriminator; the scheme set is open for host-defined targets.
+- `target_ref` (string) — the change target as `<scheme>:<opaque>`. Standard schemes: `grain:sha256:<hash>` (a specific grain), `entity:<namespace>/<subject>` (an entity), `query:<namespace>/<name>` (a saved query, CAL §8.18), `template:<namespace>/<name>` (a template, CAL §10.6) — either MAY be revision-qualified as `…@<definition_hash>` (§28.4.1) —, `doc:<host-id>` (a host document, e.g. `doc:claude.md`), `host:<opaque>` (an opaque host object). The scheme is the target-kind discriminator; the scheme set is open for host-defined targets.
 - `analyzer` (map) — the producing logic: `{id: string, params?: map}`, where `id` is a versioned identifier `publisher.name/major` (e.g. `"waiser.duplicate_sweep/1"`) and `params` is an optional snapshot of the parameters it ran with. Full "why" provenance without a second grain.
 - `summary` (map) — a deterministic, template-rendered description: `{template_id: string, args: map}`. An analyzer MUST NOT store free prose here; the human-readable string is produced by rendering `template_id` with `args`, so summaries stay reproducible and translatable.
 - `dedup_key` (string) — the recommendation's stable proposal identity, computed (never author-chosen) per normative rule 5. Two recommendations with the same `dedup_key` are the same proposal; a supersession chain (evidence refresh, a growing cluster) shares one `dedup_key` across all of its content addresses.
 - exactly one **proposal** field:
-  - `proposal_cal` (string) — a CAL batch of Tier-1 *evolve* writes (`ADD` / `SUPERSEDE` / `REVERT`; CAL §2.2). The standard change form. CAL has no destructive verb — `FORGET`, `DELETE` and their kin are excluded at the grammar level and are parse errors, not keywords (CAL §2.4) — so a `proposal_cal` is always non-destructive and always invertible. A destructive change, where a host supports one at all, MUST be proposed as `proposal_data` and executed outside CAL.
+  - `proposal_cal` (string) — a CAL batch of Tier-1 *evolve* writes (`ADD` / `SUPERSEDE` / `REVERT`; CAL §2.2), the standard change form, and — since CAL 1.3, where the host authorizes destructive proposals — Tier-2 destruction statements (`FORGET`; CAL §8.14). A Tier-1-only `proposal_cal` is always non-destructive and always invertible. A `proposal_cal` carrying Tier-2 statements executes only if the applying principal holds the required `delete`/`erase` verbs (§12.6; CAL §8.16.1 two-key property), and its apply MUST be recorded **not rollbackable** (§8.12.1). CAL's Tier-3 governance statements (`APPROVE`/`APPLY`/…) are refused inside `proposal_cal` unconditionally — a recommendation must not approve recommendations (CAL §8.14.3). Predicate destruction remains grammar-excluded at every tier (CAL §2.4). A destructive change beyond CAL's Tier-2 shapes MUST be proposed as `proposal_data` and executed outside CAL.
   - `proposal_edit` (map) — `{format: string, base_digest: string, diff: string}` for `doc:` targets; `base_digest` lets an applier detect a stale base before editing.
   - `proposal_data` (map) — an opaque host-config change for `host:` targets.
 - `created_at` (int64, epoch ms)
@@ -1133,13 +1217,13 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 - **Authoritative record.** Each lifecycle transition is one immutable **audit Observation grain** (§8.6) hash-chained per recommendation: its `derived_from` includes the recommendation's content address and the previous audit grain's address (plus any result addresses). The acting principal is recorded in the audit grain's existing `observer_id` (§8.6) — e.g. `"user:alice"`, `"agent:worker-3"`, `"policy:auto"` — and its class in `observer_type`, which MUST be either `"human"` (registered, §24.2) or one of the namespaced values `"rec:agent"`, `"rec:policy"`, `"rec:system"` (§24.3). No field beyond the Observation schema is introduced. The transition's mandatory human-readable reason is carried in the audit grain's `object` (§6.1) — the common field CAL projects as an Observation's text content (CAL §10.3.2), so the reason renders correctly in SML with no additional rule (RECOMMENDED ≤ 500 chars). An audit grain's `observer_id` MUST NOT be elided under §10.2: the acting principal is what makes the chain tamper-evident, and a selectively-disclosed chain that has dropped it is no longer an audit trail. The chain is portable, tamper-evident, and fork-mergeable.
 - **State machine.** `pending → approved | rejected`; `approved → applied`; `applied → rolled_back`; and `rejected → pending`, which lets a recommendation re-enter review on refreshed evidence under its existing `dedup_key` rather than becoming a second proposal. `pending → applied` directly is permitted **only** when the transition's `observer_type` is `"rec:policy"` (auto-apply); `observer_type` — never `observer_id` — is the discriminator for this gate, since `observer_id` is a host-asserted label with no normative structure. `applied` and `rolled_back` are terminal. `expired` is computed from `valid_to` and is reachable only from `pending` or `approved`; an expired recommendation MUST NOT be applied, and expiry of an `approved` recommendation withdraws that approval.
 - **Content vs. lifecycle.** A change in the recommendation's *content* (refreshed evidence, a larger cluster) is a **supersession** of the grain — a new content address with the **same `dedup_key`** — not a status change. Lifecycle ≠ content. A supersession MUST reset the superseding grain's `rec_status` to `pending`: approval is granted to specific content and never carries forward to content no reviewer has seen.
-- **Reproducible undo.** The inverse of an applied proposal is derived at apply time and recorded on the applied audit grain as a store-operation plan (no new CAL syntax): a `SUPERSEDE` reinstates the prior content; an `ADD` is undone by superseding the added grain with `invalidation_type: "retraction"`, which closes its `system_valid_to` and removes it from the default recall path while the blob itself survives (§5.6, §28.3) — OMS defines no separate tombstone mechanism, and none is needed; a `REVERT` is undone by superseding back to the reverted head; a document edit supersedes back to the prior head. Because CAL is structurally non-destructive (§2.4 of the CAL spec), every `proposal_cal` is rollbackable. A `proposal_data` change is opaque to OMS and MAY be irreversible: a host that cannot derive an inverse for one MUST record it as not rollbackable on the applied audit grain rather than offer a rollback it cannot perform.
+- **Reproducible undo.** The inverse of an applied proposal is derived at apply time and recorded on the applied audit grain as a store-operation plan (no new CAL syntax): a `SUPERSEDE` reinstates the prior content; an `ADD` is undone by superseding the added grain with `invalidation_type: "retraction"`, which closes its `system_valid_to` and removes it from the default recall path while the blob itself survives (§5.6, §28.3) — OMS defines no separate tombstone mechanism, and none is needed; a `REVERT` is undone by superseding back to the reverted head; a document edit supersedes back to the prior head; a **definition change** (§28.4.1) is undone by rewriting the replaced body recorded on the applied audit grain — which is why recording it is mandatory there, and why a definition target SHOULD be revision-qualified when proposed. Because CAL's Tier-1 statements are structurally non-destructive, every Tier-1-only `proposal_cal` is rollbackable. A `proposal_cal` carrying CAL Tier-2 destruction (tombstone or erasure — one-way by definition, CAL §8.14.1) MUST be recorded as **not rollbackable** on the applied audit grain. A `proposal_data` change is opaque to OMS and MAY be irreversible: a host that cannot derive an inverse for one MUST record it as not rollbackable on the applied audit grain rather than offer a rollback it cannot perform.
 
 **Normative rules:**
 1. Exactly one of `proposal_cal`, `proposal_edit`, `proposal_data` MUST be present.
 2. Recommendation grains MUST NOT be mutated in place; every content change is a supersession, every lifecycle transition an audit Observation grain (§8.6). The `rec_status` index-layer cache MUST be reconstructible from the audit chain alone.
 3. Lifecycle-derived state MUST NOT be writer-settable: `rec_status` is an index-layer field (§5.6, §6.1, §28.3), so the general rule that writers MUST NOT set index-layer fields applies to it, and a `SUPERSEDE … SET` targeting it MUST be rejected. Transitions occur only through the review/apply path that emits audit grains.
-4. `summary.template_id` MUST reference a deterministic template and `summary.args` MUST carry the values it interpolates; implementations MUST NOT store analyzer-authored free prose in `summary`.
+4. `summary.template_id` MUST reference a deterministic template and `summary.args` MUST carry the values it interpolates; implementations MUST NOT store analyzer-authored free prose in `summary`. Where the referenced template is a stored definition (§28.4.1), `template_id` SHOULD carry its revision as `<name>@<definition_hash>`: a template is editable host metadata, so a bare name renders a *summary* whose text can silently change after the reviewer approved it. A host that resolves a bare name MUST resolve it to the current revision and record which one it used on the audit grain.
 5. `dedup_key` MUST be computed (never author-chosen) as the lowercase hex SHA-256 of three NUL-separated, UTF-8 encoded components — **analyzer-family**, **`target_ref`**, **action-kind** — in exactly this order:
 
    ```
@@ -1153,6 +1237,121 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 7. Recommendation grains SHOULD use a dedicated namespace (e.g. `"agent:recommendations"`) to keep the proposal queue efficiently discoverable and separable from user memory.
 8. **Execution authority.** A stored `proposal_cal` is CAL authored by one principal and executed later by another, so it does not carry a capability of its own — CAL binds every query to a `CapabilityToken` at execution time (CAL §2.3). An applier MUST execute the batch under the **approving principal's** capability, never the analyzer's and never an ambient store authority; for an auto-applied recommendation it is the host-configured policy principal for the recommendation's namespace, not a principal derived from `observer_id` — that field is a host-asserted label with no normative structure and MUST NOT be resolved to a capability. An applier MUST reject a proposal whose writes resolve outside the recommendation's own namespace: a recommendation MUST NOT propose writes into a namespace it does not itself inhabit.
 9. **Bounds and target validation.** `proposal_cal` MUST NOT exceed CAL's `MAX_QUERY_LENGTH` (8192 bytes), and applying it is subject to the same Tier-1 write quotas as any other CAL batch (CAL §2.3). Before applying a `proposal_edit`, a host MUST resolve the `doc:` target against an allowlist and MUST verify `base_digest` against the current document head, rejecting the proposal if the base has drifted. `proposal_data` is opaque to OMS: a host MUST validate it against its own schema before applying, and SHOULD require it to be signed (§9) when the recommendation crosses a trust boundary.
+
+### 8.13 Trigger (type = 0x0D)
+
+A standing rule that starts a Workflow — an interval, a calendar schedule, an
+external source to poll, a condition over this memory, or a gate over other
+triggers.
+
+**Required fields:**
+- `type` = "trigger"
+- `kind` (string) — see the kind registry below
+- `workflow` (string) — content address of the Workflow grain (§8.4) this
+  trigger starts
+- `created_at` (int64, epoch ms)
+
+**Optional fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `connector` | string | Name of the external system, e.g. `"gmail"`, `"stripe"`. Part of the firing identity (see §27.8) |
+| `scope` | string | What is watched, in the connector's own vocabulary, e.g. `"mailbox:accounts@example.com"` |
+| `enabled` | bool | Whether the trigger is live. Default `true` |
+| `dedup_key` | array[string] | JSON Pointers (RFC 6901) into an item, joined in order, identifying the *occurrence* |
+| `interval_secs` | int | Seconds between firings, for `interval` and `polling` |
+| `cron` | string | Calendar expression, for `schedule` |
+| `at_ms` | int64 | Absolute instant, for `once` |
+| `predicate` | map | A filter expression: selects grains for `memory`, composes members for `composite` |
+| `members` | map[string→string] | Alias → trigger content address, for `composite` |
+| `correlate` | string | JSON Pointer whose value correlates member firings |
+| `window_ms` | int64 | How long a partial `composite` match stays live |
+| `concurrency` | string | `"forbid"` (default) \| `"allow"` \| `"replace"` |
+| `catchup` | string | `"last"` (default) \| `"none"` \| `"all"` |
+| `config` | map | Connector transport configuration, using the `int:` keys of the Integration profile (§A.7) |
+| All common fields | | |
+
+**`kind` registry** (closed):
+
+| Value | Fires when |
+|---|---|
+| `"interval"` | `interval_secs` have elapsed since the last firing |
+| `"schedule"` | the `cron` expression matches |
+| `"once"` | `at_ms` passes; never again |
+| `"polling"` | a connector reports new items |
+| `"memory"` | grains matching `predicate` appear in this memory |
+| `"webhook"` | the host delivers a payload |
+| `"manual"` | an operator fires it |
+| `"composite"` | `predicate` over `members` is satisfied |
+
+**Normative rules:**
+
+1. **Binding direction.** A Trigger names its Workflow; a Workflow MUST NOT
+   carry a list of triggers. A Workflow is content-addressed, so a plan
+   accumulating trigger references would change address whenever one was added
+   or removed, invalidating every reference to it — including a run's record of
+   which plan it executed.
+2. **Coherence.** A declaration that cannot fire MUST be rejected at write
+   time, not stored: an `interval` or `polling` trigger without a positive
+   `interval_secs`, a `schedule` without `cron`, a `once` without `at_ms`, a
+   `memory` without `predicate`, a `composite` with fewer than two `members` or
+   no `predicate`, or any trigger whose `workflow` is empty. A trigger that can
+   never fire has no symptom other than silence, which is indistinguishable from
+   a source with nothing new.
+3. **Member aliases.** For `composite`, `members` maps an alias to a content
+   address and `predicate` references the **aliases**. A content address is not
+   a legal identifier in an expression grammar, and an alias survives a member
+   being re-declared at a new address.
+4. **`config` carries transport, not identity.** The `int:` keys describe how to
+   reach a connector. A field that determines *whether or when* a trigger fires
+   is a first-class field above, so that it is queryable: implementations index
+   declared fields, not the interior of a `context`-shaped map.
+5. **Evaluation state is not part of the grain.** Next-due time, cursor,
+   lease and failure count are host-local operational state. See §27.8.
+
+**Example — polling an external source:**
+
+```json
+{
+  "type": "trigger",
+  "kind": "polling",
+  "workflow": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+  "connector": "gmail",
+  "scope": "mailbox:accounts@example.com",
+  "enabled": true,
+  "interval_secs": 120,
+  "dedup_key": ["/message_id"],
+  "config": {
+    "int:cursor_field": "since",
+    "int:cursor_type": "timestamp",
+    "int:allowed_outbound_hosts": ["https://gmail.googleapis.com"]
+  },
+  "namespace": "accounting",
+  "created_at": 1740700000000
+}
+```
+
+**Example — a gate over two other triggers:**
+
+```json
+{
+  "type": "trigger",
+  "kind": "composite",
+  "workflow": "b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1",
+  "members": {
+    "invoice": "c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+    "purchase_order": "d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+  },
+  "predicate": {
+    "kind": "and",
+    "left": { "kind": "comparison", "field": "invoice", "comparator": "eq", "value": true },
+    "right": { "kind": "comparison", "field": "purchase_order", "comparator": "eq", "value": true }
+  },
+  "correlate": "/thread_id",
+  "window_ms": 600000,
+  "created_at": 1740700000000
+}
+```
 
 ---
 
@@ -1337,6 +1536,70 @@ In distributed systems:
 **Rationale:** Treating the original as canonical preserves the immutability guarantee (original is a fixed point) while allowing dynamic, per-recipient selective disclosure without re-signing or rehashing.
 
 ---
+
+### 10.5 Pseudonymized Egress (new in 1.6)
+
+Selective disclosure (Sections 10.1-10.4) hides fields from a *receiving
+store*. Pseudonymized egress addresses the other disclosure channel: the
+**external model**. When context leaves for an LLM, sensitive values are
+replaced with category-typed placeholder tokens (`[PERSON_1]`,
+`[EMAIL_2]`); the placeholder-to-value mapping stays with the holder, and
+the model's response is rehydrated by exact token replacement before the
+caller sees it. This is **pseudonymization, not anonymization** -- an
+implementation MUST NOT describe it otherwise: with the mapping retained,
+the egress stream remains personal data, and rich content stays linkable
+under auxiliary-knowledge attacks regardless of identifier removal.
+
+#### 10.5.1 The `anon:<namespace>` policy (reserved store-metadata prefix)
+
+A per-namespace JSON policy declaring mode (`off | egress | ingress | both
+| audit`), category-to-action mappings (`pseudonym | mask | redact |
+generalize:<bucket> | allow`), detector demands, pseudonym scope, and
+placeholder template. Conformance requirements:
+
+- **Replication is write-if-absent.** Like retention declarations, a sync
+  MUST NOT silently swap a live local policy, and an applied row MUST take
+  effect on the live handle rather than at the next open.
+- **An unreadable policy row fails reads closed.** A policy the
+  implementation cannot parse MUST NOT silently mean "no policy": reads of
+  covered namespaces refuse until the row is repaired, while policy writes
+  keep working so it can be.
+- **Declaring a policy stamps the file's minimum-reader version**, so an
+  older implementation is warned loudly at open that the file declares
+  protection it cannot honor.
+- Value-derived (cross-handle-stable) pseudonyms MUST be keyed from the
+  file's encryption key; an implementation MUST refuse such declarations
+  on an unencrypted file rather than degrade to unkeyed derivation.
+
+#### 10.5.2 The `vault:` prefix (reserved, never replicated)
+
+`vault:<namespace>:<placeholder>` rows persist the sealed
+placeholder-to-value mapping for flows that must rehydrate across
+processes. Conformance requirements are prohibitions:
+
+- The prefix is **reserved**; implementations MUST NOT repurpose it.
+- Vault rows **MUST NOT ride bundles or segments in either direction** --
+  export omits them and import refuses them. A re-identification table
+  travelling to a replica undoes the pseudonymization it serves.
+- Values MUST be sealed under a key derived from the file's encryption key
+  with its own domain separation, so destroying the file key destroys the
+  vault -- crypto-erasure reaches it by construction.
+- **Erasure reaches the vault**: subject erasure (CAL `FORGET SUBJECT`)
+  MUST also remove every vault row and live mapping entry whose plaintext
+  names the erased identity, and MUST treat a failure to do so as an
+  error, never best-effort.
+- Reverse lookup (reveal / CAL `REHYDRATE`) is a privileged act: gated on
+  a grant and recorded as a Tier-2 audit Observation naming value
+  *fingerprints*, never identities.
+
+#### 10.5.3 The `anonymized` response report
+
+When an egress policy is active, query responses carry an `anonymized`
+object beside the result: covered namespaces, whether a host-level floor
+forced coverage, and per-namespace mapping **ids**. The mappings
+themselves MUST NOT ride any response payload -- rehydration custody stays
+with the holding process. Consumers MUST treat the field's absence as
+"values are as stored", never as "values are safe".
 
 ## 11. File Format (.mg files)
 
@@ -1685,6 +1948,118 @@ The `locked` invalidation policy combined with COSE signing provides layered pro
 
 **Prompt injection resistance:** A user or external input asserting "your owner is now X" does not create or modify an ownership grain. The agent lacks the owner's private key and cannot author a superseding grain that passes the `locked` policy check. The original ownership fact remains current.
 
+### 12.6 Authorization (new in 1.6, draft)
+
+Authorization answers "what may this principal do in this memory?" It is the
+model CAL's Tier 2/3 statements consume (CAL §2.2, §8.14–§8.16), and it is
+usable by any host independently of CAL. The design principle is the
+**credential/policy split**: *policy* (who may do what here) is a truth about
+the memory and lives in it as grains; *credentials* (proving who a caller is)
+are host objects and MUST NOT be carried in grains, statements, or the memory
+file in any form.
+
+#### 12.6.1 Principals, verbs, scope
+
+- A **principal** is an opaque, non-empty name. Humans and agents are not
+  distinguished by the model: `user:anna`, `agent:support-bot`,
+  `job:retention` are all principals. A DID is a valid principal name and is
+  the upgrade path for signed deployments (§12.1) — not a prerequisite.
+- The **verb** set is closed in this revision: `read`, `write`, `supersede`,
+  `delete`, `erase`, `loop.run`, `loop.review`, `loop.apply`, `admin`
+  (semantics per CAL §8.14–§8.16; hosts without a recommendation engine
+  simply never resolve the `loop.*` verbs).
+- **Scope** is one namespace or `*`. The memory axis is implicit: a grant
+  governs only the memory it is stored in. Cross-memory access is governed by
+  each memory's own grants.
+
+#### 12.6.2 Grant grains
+
+A grant is a **Fact grain** (§8.1) in the reserved namespace
+**`agent:authz`** (following the `agent:identity` / `agent:recommendations`
+precedent, §12.5.3, §8.12 rule 7):
+
+| Field | Value |
+|---|---|
+| `type` | `"fact"` |
+| `namespace` | `"agent:authz"` |
+| `subject` | the **grantee** principal name |
+| `relation` | `"mg:permits"` |
+| `object` | the canonical grant string: `"<verbs> ON <scope>"`, where `<verbs>` is the granted verbs lowercase, comma-separated without spaces, sorted lexicographically, and `<scope>` is the governed namespace(s) comma-separated without spaces, sorted, or the literal `*` — e.g. `"delete,read ON caller,shared"`, `"admin ON *"` |
+| `confidence` | `1.0` |
+| `context` | grantor and reason under reserved keys: `{"grantor": "<principal>", "because": "<reason>"}` (`because` present when given) |
+| `author_did` | RECOMMENDED where DIDs are deployed — binds the grant cryptographically when the grain is COSE-signed (§9) |
+
+The canonical `object` form is normative: two grants conferring the same
+rights MUST serialize to the same string, so grants deduplicate
+content-addressably and compare across implementations.
+
+**Effective rights** of a principal for a namespace = the union of the verbs
+in **live** grant grains naming it — grains in `agent:authz` with
+`subject = <principal>`, `relation = "mg:permits"`, not superseded
+(`superseded_by` unset, `system_valid_to` unset) — whose scope includes the
+namespace (or is `*`). Resolution MUST fail closed: an unknown principal or
+an empty result confers nothing.
+
+Because grants are ordinary grains, the PERMISSION relation category query
+(CAL §7) already retrieves them; CAL's `SHOW GRANTS` is sugar over it.
+
+#### 12.6.3 Revocation
+
+Revocation is **retraction-by-supersession** — the native invalidation
+mechanism (§5.6, §28.3), so grant history is append-only and auditable:
+
+- A **full revoke** supersedes the covering grant grain(s) with
+  `invalidation_type: "retraction"`, closing their `system_valid_to`.
+- A **partial revoke** supersedes the covering grant with a new grant grain
+  whose canonical `object` carries the reduced verb/scope set.
+- The revoking principal and reason ride the superseding grain's `context`
+  (`{"grantor": ..., "because": ...}`) and the standard invalidation fields.
+
+`mg:revokes` remains the **Consent-domain** relation for data-subject consent
+withdrawal (§8.10) — authorization revocation deliberately does not use it,
+so PERMISSION-category queries over live grains return exactly the effective
+grant set with no subtraction logic.
+
+**Authoring authority:** writing or superseding any grain in `agent:authz`
+requires the `admin` verb (or an owner session, §12.6.4). Every `erase`
+grant is explicit: if a future revision defines role bundles, no bundle may
+include `erase`.
+
+#### 12.6.4 Owner sessions and bootstrap
+
+A host MAY designate a local session as the memory's **owner** — the
+implicit superuser, exempt from grant lookup (the `root@localhost` /
+SQLite-file-owner precedent). The owner writes the first grant. A memory
+containing no grant grains confers nothing on any non-owner principal —
+fail-closed by construction — while remaining fully usable by its owner, so
+a single-operator memory never needs to know this section exists.
+
+**Tamper honesty:** whoever holds the file bytes is root over them — as with
+any database's data directory. Content addressing and the operation log make
+out-of-band edits *detectable*; COSE signing (§9) is the high-assurance
+upgrade path.
+
+#### 12.6.5 Replication
+
+Grant grains replicate as **sync**: an importer, follower, or hub applies
+them like any other grain, without re-authorization — the file carries its
+own access policy wherever it goes. *Authoring* a grant (creating or
+superseding in `agent:authz`) requires `admin`/owner authority at the
+writing host. Disclosure property: a synced memory reveals its principal
+names to every replica; deployments that consider principal names sensitive
+SHOULD use opaque identifiers.
+
+#### 12.6.6 Relationship to other mechanisms
+
+- `invalidation_policy` (§23) continues to govern *supersession of specific
+  grains*; §12.6 governs *operations by principals*. They compose: a
+  supersession must pass both.
+- Consent grains (§8.10) record *data-subject* consent and are unrelated to
+  operational authorization; do not encode grants as Consent.
+- The delegation fields (§6.11, `authorized_namespaces`) describe
+  *agent-to-agent* delegated authority in Goal grains; a host MAY map them
+  onto verbs, but grant grains are the authorization source of truth.
+
 ---
 
 ## 13. Sensitivity Classification
@@ -1906,7 +2281,7 @@ Implementations MUST declare which level they support:
 - Deserialize version byte + canonical MessagePack payload
 - Compute and verify SHA-256 content addresses
 - Support field compaction (short keys → full names)
-- Support all twelve standard grain types (0x01–0x0C) per §8 schemas
+- Support all thirteen standard grain types (0x01–0x0D) per §8 schemas
 - Ignore unknown fields
 - Constant-time hash comparison
 
@@ -1942,6 +2317,29 @@ All Level 2 requirements, plus:
 - Crash recovery and reconciliation
 - Policy engine with compliance presets
 - SHOULD partition Observation grain storage by observer domain, inferred from `observer_type`. Physical observer types (see Section 24) SHOULD flow to time-series storage with raw-data retention policies. Cognitive observer types SHOULD flow to vector + relational storage with the same retrieval semantics as Fact grains. Implementations MUST NOT hard-code the domain partition list — treat `observer_type` as an open string and drive routing from configuration or namespace.
+
+### 17.4 Optional modules
+
+Orthogonal to Levels 1–3, some capabilities are optional **modules**: not every
+store performs them, and one that does not is not a lesser implementation.
+Implementing a module means implementing it whole. This mirrors CAL's tier
+modules (CAL §24) — **modules gate operations, not portability.** Interoperability
+rides the `.mg` file: any Level 1 reader can read a memory containing a module's
+grains.
+
+| Module | Requires |
+|---|---|
+| `triggers` | The full execution contract of §27.8, including its idempotency, non-replication and arbitration rules |
+
+An implementation declares its modules alongside its level:
+
+```json
+{ "oms_conformance": 3, "oms_modules": ["triggers"] }
+```
+
+An implementation that stores and replicates Trigger grains without evaluating
+them MUST NOT declare the module. Storing them is ordinary grain handling and
+needs no declaration; *acting* on them is what the contract governs.
 
 ---
 
@@ -2774,109 +3172,41 @@ Scientific and legal workflows cite external artifacts outside the OMS hash spac
 
 The `derived_from` field SHOULD accept both OMS content addresses and external citation objects.
 
-### 27.6 Trigger Definitions via Observation Grains
+### 27.6 Trigger Definitions via Observation Grains — **REMOVED in 1.6**
 
-Triggers observe external systems for changes (new events, incoming webhooks, scheduled intervals). This maps naturally to the Observation grain (type 0x06) — triggers are observers. No new grain type is required; existing Observation fields accommodate trigger definitions through the following convention.
+Superseded by the **Trigger grain type (§8.13)**.
 
-**Field mapping for triggers:**
+This section described a convention in which a trigger was an Observation grain
+with `observer_type: "trigger:*"` and its configuration in the `context` map
+under `int:` keys, on the reasoning that *"existing Observation fields
+accommodate trigger definitions"*. That premise proved false three ways, and the
+section is removed rather than deprecated: preserving text that instructs
+implementers to write non-conformant grains is worse than removing it.
 
-| Observation Field | Trigger Usage |
-|---|---|
-| `observer_id` | Connector name (e.g., `"github"`, `"stripe"`) |
-| `observer_type` | Trigger mechanism: `"trigger:polling"`, `"trigger:webhook"`, `"trigger:schedule"`, `"trigger:listener"` |
-| `observation_mode` | `"periodic"` (polling), `"continuous"` (webhook/listener), `"scheduled"` (cron) |
-| `observation_scope` | What is being watched (e.g., `"repos/{owner}/{repo}/issues"`) |
-| `context` | Trigger-specific configuration using `int:` prefixed fields from the Integration profile (§A.7) |
+1. **It was non-conformant against this specification's own closed enums.** It
+   placed `"periodic"` / `"continuous"` / `"scheduled"` in `observation_mode`,
+   which §25 declares **closed** over `passive | active | reflective |
+   real_time`, and a watch target such as `"repos/{owner}/{repo}/issues"` in
+   `observation_scope`, which §26 declares **closed** over the *temporal
+   breadth* values `point | interval | session | longitudinal`. Every example the
+   section carried would be rejected by a Level 2 implementation enforcing §25
+   and §26.
+2. **Configuration in `context` could not be queried.** `context` is not among
+   Observation's queryable fields, and field resolution is top-level; a filter on
+   an `int:` key inside it cannot be pushed down. Moving the keys to the top
+   level would make them queryable but places them outside `context`, which is
+   where §A.7 says `int:` fields live. The two requirements were mutually
+   exclusive.
+3. **A trigger is not an observation.** §24 partitions observers into Physical
+   ("measurements of the material world") and Cognitive ("observations of the
+   information space"). A standing rule is neither, and registering `trigger:*`
+   would have required inventing a third domain solely to make the
+   classification hold.
 
-Implementations MAY index Observation grains whose `observer_type` starts with `"trigger:"` to provide trigger catalog queries.
-
-**Example — Polling trigger:**
-
-```json
-{
-  "type": "observation",
-  "observer_id": "github",
-  "observer_type": "trigger:polling",
-  "observation_mode": "periodic",
-  "observation_scope": "repos/{owner}/{repo}/issues",
-  "structural_tags": ["profile:integration"],
-  "namespace": "axtion:connectors:github",
-  "context": {
-    "int:http_method": "GET",
-    "int:http_path": "/repos/{owner}/{repo}/issues",
-    "int:path_params": ["owner", "repo"],
-    "int:poll_interval_secs": 300,
-    "int:cursor_field": "since",
-    "int:cursor_type": "timestamp",
-    "int:connector": "github",
-    "int:config_schema": {
-      "type": "object",
-      "properties": {
-        "owner": {"type": "string"},
-        "repo": {"type": "string"},
-        "labels": {"type": "string"}
-      },
-      "required": ["owner", "repo"]
-    },
-    "int:event_schema": {
-      "type": "object",
-      "properties": {
-        "id": {"type": "integer"},
-        "title": {"type": "string"},
-        "state": {"type": "string"}
-      }
-    }
-  },
-  "created_at": 1740700000000
-}
-```
-
-**Example — Webhook trigger:**
-
-```json
-{
-  "type": "observation",
-  "observer_id": "stripe",
-  "observer_type": "trigger:webhook",
-  "observation_mode": "continuous",
-  "observation_scope": "payment_intent.succeeded",
-  "structural_tags": ["profile:integration"],
-  "namespace": "axtion:connectors:stripe",
-  "context": {
-    "int:webhook_path": "/webhooks/stripe/{token}",
-    "int:webhook_secret_header": "Stripe-Signature",
-    "int:connector": "stripe",
-    "int:event_schema": {
-      "type": "object",
-      "properties": {
-        "id": {"type": "string"},
-        "amount": {"type": "integer"},
-        "currency": {"type": "string"}
-      }
-    }
-  },
-  "created_at": 1740700000000
-}
-```
-
-**Example — Scheduled trigger:**
-
-```json
-{
-  "type": "observation",
-  "observer_id": "scheduler",
-  "observer_type": "trigger:schedule",
-  "observation_mode": "scheduled",
-  "observation_scope": "daily-report",
-  "structural_tags": ["profile:integration"],
-  "context": {
-    "int:cron_expression": "0 9 * * MON-FRI",
-    "int:timezone": "America/New_York",
-    "int:connector": "scheduler"
-  },
-  "created_at": 1740700000000
-}
-```
+Migration: a trigger Observation becomes a Trigger grain (§8.13). `observer_id`
+becomes `connector`, the `trigger:*` suffix becomes `kind`, the watch target
+becomes `scope`, and the cadence keys become first-class fields. `int:` keys
+that genuinely describe connector transport stay in `config`.
 
 ### 27.7 Consensus Grain Usage for Tool Definition Validation
 
@@ -2912,6 +3242,71 @@ When multiple independent sources produce or validate the same Tool definition g
   "created_at": 1740700000000
 }
 ```
+
+---
+
+### 27.8 Trigger Execution Contract
+
+§8.13 defines what a trigger *is*. This section defines what an implementation
+that evaluates one MUST do. Declaring the shape without the contract was the
+gap that made the removed §27.6 unimplementable in an interoperable way: nothing
+normative said what evaluates a declaration, what a firing produces, or what
+idempotency a twice-delivered item receives.
+
+An implementation that evaluates triggers declares the `triggers` module (§17.4).
+One that does not MAY store and replicate Trigger grains without acting on them;
+they are ordinary grains.
+
+**1. Firing MUST be journaled.** Each firing writes a record naming the trigger,
+what it produced, and what it skipped. A trigger that has never fired MUST be
+distinguishable from one that has fired and found nothing — otherwise a
+misconfigured trigger and an idle one look identical, and the misconfiguration
+has no symptom.
+
+**2. Ingestion MUST be idempotent on the declared `dedup_key`.** The same item
+seen twice — connector replay, overlapping cursors, two evaluators racing — MUST
+produce one unit of work and a recorded skip, never two. Implementations SHOULD
+derive the work identity from `(connector, dedup value)` rather than the dedup
+value alone; following CloudEvents, an `id` is unique only within a producer, so
+two connectors sharing an id space would otherwise collide.
+
+**3. First evaluation MUST NOT replay history.** A newly declared `polling`
+trigger records the source's current position and fires nothing. Without this,
+declaring a trigger over an established source starts work for its entire
+history.
+
+**4. An absent baseline means different things for different kinds.** A trigger
+with no recorded next-due time has never been evaluated. For a *relative*
+cadence (`interval`, `polling`) that means it is due now — there is nothing to
+wait out. For an *absolute* schedule (`schedule`, `once`) it does NOT: the
+trigger is due at the instant it names, and an implementation MUST NOT fire a
+`cron` of `0 9 * * *` merely because it was just declared. A `once` trigger MUST
+fire at most once; "no next instant" MUST be represented distinctly from "no
+baseline yet", or it re-fires indefinitely.
+
+**5. Evaluation state MUST NOT replicate.** Next-due time, source cursor, lease
+and failure count are host-local. Replicating them lets two hosts sharing a
+memory each defer to the other's watermark, and lets a memory restored into a
+different environment inherit a cursor and silently skip work it should have
+done. This is the mirror of §8.12's rule that *governance* state must replicate:
+a record of who did what has to travel with the file; a record of where one host
+had got to must not.
+
+**6. Concurrent evaluation MUST be arbitrated by the store.** Where several
+evaluators can reach one memory, claiming MUST be a conditional write, and an
+evaluator whose claim has expired MUST NOT be able to write behind whichever
+one succeeded it. Losing a claim is a normal outcome and MUST NOT be reported as
+an error.
+
+**7. Failure MUST back off.** A connector that fails repeatedly MUST have its
+next evaluation deferred, and the reason MUST be inspectable. An implementation
+MUST NOT retry a failing source at its declared cadence.
+
+**8. Calendar semantics MUST be stated, not assumed.** Implementations disagree
+about a `cron` occurrence falling in a daylight-saving gap — some skip it, some
+fire it immediately — and agree only on the repeated hour, where it fires once.
+An implementation MUST document which it does, and SHOULD refuse a timezone it
+would mishandle rather than fire at the wrong hour and be believed.
 
 ---
 
@@ -2955,6 +3350,7 @@ Examples:
 - `"acme:chatbot:agent-7"` — org-scoped, app-scoped, agent-scoped
 - `"acme:chatbot:agent-7:session-42"` — additionally run-scoped
 - `"agent:identity"` — reserved for ownership and identity grains (§12.5)
+- `"agent:authz"` — reserved for authorization grant grains (§12.6)
 - `"shared"` — default, no specific partition
 
 The `run_id` field (§6.1) provides session/run scoping orthogonal to the namespace hierarchy. Use `run_id` when runs are ephemeral and high-cardinality; use namespace segments when partitions are stable and low-cardinality.
@@ -2984,11 +3380,231 @@ OMS does not define a formal store API. However, implementations that expose a p
 | `exists` | `(content_address) → bool` | Check if a grain exists without retrieving it |
 | `query` | `(filters, sort, limit, cursor) → result_envelope` | Structured query with the response envelope from §28.1 |
 | `search` | `(embedding_or_text, filters, limit) → result_envelope` | Semantic similarity search combined with structured filters |
-| `delete` | `(content_address) → void \| error` | Compliance-only erasure (GDPR Art. 17, consent cascade). MUST NOT be exposed as a general-purpose API. MUST check litigation holds (`invalidation_policy.mode: "hold"`) before deleting. |
+| `delete` | `(content_address) → void \| error` | Compliance erasure (GDPR Art. 17, consent cascade, retention). MUST NOT be exposed as a general-purpose unauthenticated API; MAY be surfaced to authorized principals via CAL Tier 2 (`FORGET`/`PURGE`, CAL §8.14 — `delete`/`erase` verbs, §12.6), each execution writing an audit Observation. MUST check litigation holds (`invalidation_policy.mode: "hold"`) before deleting. **One-way:** additions roll back by retraction (supersession); a delete or erasure is final — no un-delete operation exists, and a host MUST NOT add one. |
 | `put_batch` | `(blob_bytes[]) → content_address[] \| error[]` | Batch ingest for consolidation, migration, and high-throughput scenarios |
 | `get_batch` | `(content_address[]) → grain[] \| not_found[]` | Batch retrieval for provenance chain traversal and context assembly |
+| `put_blob` | `(bytes) → cas_uri \| error` | Store multi-modal content in the memory's content-addressed store; returns its `cas://sha256:` address (§7.1.1). **Idempotent by construction** — the address is the content, so re-storing identical bytes returns the same address and writes nothing new |
+| `get_blob` | `(cas_uri) → bytes \| not_found \| error` | Fetch blob bytes, **verifying the digest against the address** before returning them (§7.1.1 rule 2) |
 
 Stores SHOULD implement `supersede` as a distinct operation rather than exposing raw `put` + index mutation separately. Supersession is the most error-prone operation (invalidation policy checks, derivation DAG traversal for `scope: "subtree"`, atomic index update) and deserves a dedicated, well-tested code path.
+
+### 28.4.1 Host metadata table (new in 1.6)
+
+Every operation in §28.4 addresses a grain. A memory also carries a small
+amount of state that is **not** memory: declarations about the file itself, and
+definitions an operator authored so they travel with it. Sections 10.5.1,
+10.5.2 and §27.8 already refer to "reserved store-metadata prefixes" without
+this specification saying what a store-metadata row *is*. This section defines
+it.
+
+A conforming store that offers a programmatic interface SHOULD expose a
+**metadata table**: a flat, string-keyed, string-valued map stored in the
+memory alongside its grains.
+
+| Operation | Signature | Description |
+|---|---|---|
+| `meta_get` | `(key) → value \| not_found` | Read one metadata row |
+| `meta_put` | `(key, value) → void \| error` | Create or replace one row. Replacing a row overwrites it; there is no metadata history |
+| `meta_delete` | `(key) → void \| error` | Remove one row |
+| `meta_scan` | `(key_prefix) → [(key, value)]` | Enumerate rows under a prefix |
+
+**Normative rules:**
+
+1. **Metadata rows are not grains.** They are not content-addressed, they do
+   not appear in `query`/`search` results, they do not supersede, they carry no
+   provenance, and writing one does not change any content address. An
+   implementation MUST NOT surface metadata rows through a grain read.
+2. **Rows are per-memory.** The isolation unit for metadata is the memory that
+   holds it, exactly as for grains.
+3. **The prefix registry below is closed to implementations.** A prefix listed
+   there carries the stated semantics; an implementation MUST NOT repurpose
+   one. Unlisted prefixes are available for host use and need no registration,
+   but an implementation MUST preserve rows it does not recognize rather than
+   dropping them on rewrite -- a memory is routinely opened by more than one
+   implementation and by more than one version of the same one.
+4. **Replication is per-prefix, and the default is "does not replicate".** A
+   metadata row replicates only where its prefix says so. The distinction the
+   registry encodes throughout is: **what a definition or declaration *is* may
+   replicate; a record of where one host got to MUST NOT.** A peer receiving
+   another host's cursor, lock, or usage counter would act on a position it
+   never occupied.
+5. **Point-in-time restore skips metadata**, and MUST report that it did. A
+   restore reconstructs grain history; it is not an instruction to revert an
+   operator's configuration to what it was on the restore date.
+6. **An unloadable row is skipped, warned, and kept.** A row written by a newer
+   revision, or one that no longer satisfies a since-tightened limit, MUST NOT
+   fail the open. The implementation skips it, reports it through whatever channel
+   it reports open-time warnings on, and leaves it in the file so an implementation that
+   can read it still can. Overwriting the row is what loses it.
+
+**Reserved prefix registry:**
+
+| Prefix | Holds | Replicates | Defined in |
+|---|---|---|---|
+| `qry:<name>` | A saved query definition | Yes — latest-wins on the definition's update time | CAL §8.18 |
+| `tpl:<name>` | A custom output template definition | Yes — latest-wins on the definition's update time | CAL §10.6 |
+| `retention:<namespace>` | A declarative retention policy | Yes — write-if-absent | §10.5.1 (same rule) |
+| `anon:<namespace>` | A pseudonymized-egress policy | Yes — write-if-absent | §10.5.1 |
+| `vault:<namespace>:<placeholder>` | A sealed placeholder→value mapping | **Never, in either direction** | §10.5.2 |
+| `trg:<trigger>` | Per-host trigger evaluation state (baselines, cursors, dedup keys) | **No** — host-local by §27.8 | §27.8 |
+
+**Definition identity (normative).** A row under a *definition* prefix
+(`qry:`, `tpl:`) is a versionable object that other grains name and audit
+trails pin, so it MUST carry two distinct stamps, and an implementation MUST
+NOT collapse them:
+
+| Stamp | What it is | What it is for |
+|---|---|---|
+| `updated_at` | Epoch time the definition was last written | The replication tiebreaker (latest-wins) and the human-facing "when did this change" |
+| `definition_hash` | Lowercase hex SHA-256 over the NFC-normalized definition body, computed exactly as §5.2 computes a grain's content address over its canonical bytes | The stable identity of *this* revision |
+
+They answer different questions and neither substitutes for the other. A
+timestamp cannot identify a revision: two hosts that edit a template to the
+same body produce different `updated_at` values for identical content, and a
+latest-wins merge then picks a winner between two rows that do not actually
+differ. A hash cannot order revisions: it says *which* body, never *which
+came later*. Replication needs the ordering; an audit trail needs the identity.
+
+This closes the gap that made `template:<namespace>/<name>` and
+`query:<namespace>/<name>` unpinnable Recommendation targets (§8.12): a
+`target_ref` MAY carry the revision as `template:<namespace>/<name>@<definition_hash>`,
+and a Recommendation applied to a definition MUST record the **replaced body**
+on its applied audit grain, so the inverse it offers reinstates exactly the
+revision it displaced rather than "whatever was there before".
+
+Rows that record *usage* rather than definition — a last-execution stamp on a
+saved query, a last-evaluated stamp on a trigger — MUST NOT replicate even when
+they ride a replicating prefix, and an incoming update MUST leave the local
+value intact.
+
+**File-truth rows.** A store MAY also keep rows describing capabilities the
+file was written with (whether text is indexed, whether entity relations are
+extracted, embedding provenance). These are infrastructure truths about one
+copy, and they MUST NOT replicate: a peer that cannot build a text index does
+not acquire one by importing a bundle that says it has one.
+
+### 28.4.2 Blob concurrency (new in 1.6)
+
+A blob is immutable and its address is its checksum. Those two properties
+together mean a blob read has **no consistency question to answer**, and a
+store SHOULD NOT impose one:
+
+- **Reads need no lock.** There is no version to be stale against, no partial
+  write to observe (a store MUST make blob writes atomic — write-then-rename or
+  the transactional equivalent — so a reader sees the whole blob or none of
+  it), and any corruption the absent lock could admit is caught by the digest
+  check that §7.1.1 already requires. This matters concretely on stores whose
+  memory lock is exclusive: a run holding a memory would otherwise starve the
+  very subprocess it spawned to process an attachment, for a lock protecting
+  nothing.
+- **Writes need no coordination.** Two writers storing identical bytes converge
+  by construction; two writers storing different bytes are writing to different
+  addresses.
+
+### 28.4.3 Blob lifecycle under erasure (new in 1.6)
+
+**A blob is in scope for erasure.** A subject's invoice PDF, voice recording, or
+scanned ID is personal data as surely as the grain that references it, and it is
+usually the *more* sensitive half. Erasing every grain that references it while
+leaving the bytes on disk satisfies no erasure obligation, and an implementation
+that reported such an operation as successful would be reporting an erasure it
+did not perform. This is the same severity class as the vault rule in §10.5.2,
+and it is normative for the same reason.
+
+1. **Subject erasure MUST reclaim sole-referenced attachments.** When erasure
+   (CAL `FORGET SUBJECT`, or the host equivalent) removes a set of grains, every
+   `cas://` address those grains referenced that **no surviving grain
+   references** MUST be destroyed in the same operation. An address still
+   referenced by a survivor MUST be kept: the blob is shared, and the surviving
+   reference is a legitimate claim on it.
+2. **Reclamation MUST be targeted, never a store-wide sweep.** The candidate set
+   is the erased grains' own references — not a census of every blob in the
+   store. A whole-store mark-and-sweep races concurrent writes: content uploaded
+   but not yet referenced by its grain looks unreferenced to a census taken
+   between the two, and collecting it destroys an unrelated caller's data. A
+   general garbage collection over blobs MAY be offered as a separate,
+   explicitly-invoked operation, and one that scans the whole store MUST require
+   quiescent writers.
+3. **The surviving-reference check MUST run under the same serialization as the
+   erasure.** Checking outside it reintroduces exactly the race rule 2 avoids.
+4. **The erasure report MUST state how many blobs it reclaimed**, as a distinct
+   count from grains erased. An operator confirming an Art. 17 request needs to
+   see that the attachments went, and a zero where attachments existed is the
+   signal that they did not.
+5. **Crypto-erasure MUST reach blobs.** Where a memory is encrypted, blob
+   contents MUST be sealed under a key derived from the memory's key, so
+   destroying that key destroys the attachments with the grains. A store that
+   encrypts its database while leaving attachments in the clear beside it has
+   encrypted the index and published the documents.
+
+**Residual limit, stated rather than implied.** Byte-identical content uploaded
+by a concurrent writer in the instant an erasure runs may survive it, because
+the two are indistinguishable by address — that is what content addressing
+means. Implementations SHOULD document this window rather than describe
+reclamation as unconditional.
+
+### 28.4.4 Subject reachability (new in 1.6)
+
+CAL §8.14 defines the erasure selector (`FORGET SUBJECT "<id>"`) and CAL §8.19
+its read-only mirror (`REPORT SUBJECT`), and prior revisions said what those
+statements *mean* without ever saying what they must **reach**. That gap is not
+academic. It was found in a conforming implementation as a silent
+under-erasure:
+
+> A grain carrying a `subject` but asserting no relation or object — an Event
+> *about* a person, a message, an entity — reached no structural index at all,
+> because the index required a complete triple. Both `FORGET SUBJECT` and
+> `REPORT SUBJECT` select through that index. So the identity's own transcript
+> survived an erasure **that reported success**, and went undisclosed in a DSAR
+> **that reported completeness**. Nothing in this specification made that
+> non-conformant.
+
+An implementation must not be able to pass conformance while silently
+under-erasing. The following are therefore normative.
+
+1. **Reachability is a property of the identity, not of grain shape.** Subject
+   selection MUST reach **every** grain whose `subject` matches the identity,
+   regardless of grain type and regardless of whether the grain also carries a
+   relation or an object. An implementation whose index requires a complete
+   triple MUST index subject-only grains by some other means rather than
+   omitting them.
+2. **Reach extends to the identity's derived keys.** Selection MUST also reach
+   grains that carry the identity in the `object` position (over-reach is the
+   safe direction for erasure), grains whose `session_id` or `run_id` **is** the
+   identity or is a partition-style key carrying it as a boundary-guarded
+   prefix, and — where the host offers text-mention matching — grains whose
+   indexed text mentions it.
+3. **Erasure and disclosure MUST share one selector.** The set a DSAR discloses
+   and the set an erasure removes MUST be computed by the same code path over
+   the same indexes. Two selectors drift, and a drift in this pair means either
+   disclosing what was not erased or erasing what was never disclosed. This is
+   the property that lets an implementation answer "what would you delete?"
+   honestly before deleting anything.
+4. **A selector that cannot reach a class of grains MUST NOT report success.**
+   An erasure or report whose scope is known-incomplete MUST surface that —
+   whether because a text index is absent, an index version predates a
+   reachability fix, or a grain class is not indexed at all. Reporting a count
+   without reporting the limitation is the failure mode this section exists to
+   forbid.
+5. **A reachability fix MUST heal existing memories.** Grains written before the
+   fix are already in the file and are exactly the ones at risk, so an
+   implementation MUST rebuild the affected index (an index-version stamp
+   checked at open is sufficient) rather than only indexing correctly from the
+   fix forward. A rebuild MUST reconstruct supersession state, so healing
+   neither duplicates a grain nor resurrects a superseded one.
+6. **Residual limits MUST be documented, not implied.** Text-mention matching
+   reaches exactly what the text index reaches; identifiers the tokenizer splits
+   differently are matched only through structured references; an identifier
+   appearing only inside an opaque body field is not reachable by any structural
+   selector. Implementations MUST state which of these apply rather than
+   describe erasure as exhaustive.
+
+**Conformance.** An implementation claiming subject erasure or subject
+disclosure MUST include, in its conformance suite, a case that stores a grain
+carrying **only** a subject — no relation, no object — and asserts that it
+appears in the subject report and is gone after the subject erasure. The case
+exists specifically because that grain shape is the one a triple-shaped index
+loses, and because both operations reported success while failing on it.
 
 ### 28.5 Agent Capability Convention
 
@@ -3048,6 +3664,14 @@ Conversations are reconstructed from Event grain sequences using `session_id` an
 **Retrieving a conversation:**
 1. Query: `type=event, session_id=X, system_valid_to=null, sort=timestamp_ms ASC`
 2. Or: start from the most recent Event grain (`messages_tail` in a State grain) and follow `parent_message_id` backward.
+
+**Mail and other addressed transports.** A mail thread is a conversation under
+this convention, not a separate structure: the thread is the `session_id`, and
+the reply edge is `parent_message_id`. The transport's own identifiers
+(`Message-ID`, `In-Reply-To`, `References`) and its addressing (`From`, `To`,
+`Cc`, `Subject`) have no home among the Event fields, which model LLM turns —
+they belong to the `mail:` domain profile (Appendix A.8), which maps them onto
+this convention rather than beside it.
 
 ### 28.7 Session Handoff Convention
 
@@ -3158,7 +3782,11 @@ CAL extends the store operations defined in §28.4 with a structured query langu
 | `supersede` | `SUPERSEDE <hash> SET field = value … REASON "…"` |
 | `query`/`search` + `get_batch` + compose | `ASSEMBLE … FROM … BUDGET <n> TOKENS` |
 | introspection | `DESCRIBE <type>` |
-| `delete` (compliance erasure) | no CAL equivalent — structurally excluded |
+| `delete` (compliance erasure) | `FORGET <hash>` / `FORGET SUBJECT` / `PURGE OLDER THAN` (Tier 2, authorization-gated, audited — CAL §8.14; no CAL equivalent on Tier-0/1 hosts) |
+| `meta_put` / `meta_delete` (§28.4.1) | `DEFINE QUERY` / `DROP QUERY` (CAL §8.18), `DEFINE TEMPLATE` / `DROP TEMPLATE` (CAL §10.6) — definitions, not grains |
+| `meta_get` + the body's own operations | `RUN "<name>"` (CAL §8.18.3) |
+| `meta_scan` (§28.4.1) | `DESCRIBE QUERIES` / `DESCRIBE TEMPLATES` |
+| `put_blob` / `get_blob` (§28.4) | No CAL equivalent — CAL addresses grains; blob bytes reach a caller through the host API (§7.1) |
 
 **SML output format:**
 
@@ -3306,6 +3934,73 @@ Applies to grains produced in consumer-facing agent contexts — personal assist
 
 **Normative:** Grains with `"profile:consumer"` that include `user_id` or any direct identifier MUST set `processing_basis` to a lawful basis under GDPR Art. 6 / CCPA § 1798.100 before cross-system transfer. Grains with `con:ccpa_opted_out: true` MUST NOT be included in data sale or data broker transfers.
 
+### A.8 Mail Profile (`mail:`) (new in 1.6)
+
+**Tag:** `"profile:mail"` | **Namespace prefix:** `mail:`
+
+Applies to grains recording messages carried by an addressed, threaded
+transport — email (RFC 5322), and by extension any transport with the same
+shape. Mail profile fields are stored in the grain's `context` map (compact
+key: `ctx`), following the same pattern as other domain profiles.
+
+**Why a profile and not new common fields.** Event grains model LLM turns:
+`role` is a chat enum, and threading is `session_id` + `parent_message_id`
+(§28.6). Nothing anywhere in this specification names a sender, a recipient, a
+subject line, or an RFC 5322 `Message-ID`. Every mail-shaped agent therefore
+invents its own `context` keys, which defeats portability for exactly the
+grains most worth porting — an inbox is the archetypal thing an agent is asked
+to remember across tools. A profile fixes that at the vocabulary layer without
+touching the format: `context` already exists, domain profiles already
+replicate, and no compact key, content address, or grain type changes.
+
+The alternative considered and rejected was a first-class `thread_id` common
+field. It would have meant a new compact key on every grain type for a concept
+`session_id` already carries, in a format whose field map is normative and
+frozen (§6). Mapping onto the existing fields costs nothing and loses nothing.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `mail:message_id` | string | no | RFC 5322 `Message-ID`, angle brackets included, e.g. `"<CA+abc123@mail.example.com>"`. The transport's own identifier, distinct from the grain's content address |
+| `mail:in_reply_to` | string | no | RFC 5322 `In-Reply-To` — the `Message-ID` this message replies to |
+| `mail:references` | string[] | no | RFC 5322 `References` chain, oldest first |
+| `mail:from` | string | no | Envelope/header sender address |
+| `mail:to` | string[] | no | Primary recipient addresses |
+| `mail:cc` | string[] | no | Carbon-copy recipient addresses |
+| `mail:bcc` | string[] | no | Blind-copy addresses. Present only where the storing agent was the sender; MUST NOT be populated from a received message |
+| `mail:subject` | string | no | Header subject line |
+| `mail:date` | string | no | RFC 5322 `Date` header as an ISO 8601 string, distinct from `created_at` (when the grain was written) |
+| `mail:folder` | string | no | Mailbox or label the message was read from, e.g. `"INBOX"`, `"Receipts"` |
+| `mail:direction` | string | no | `"inbound"` \| `"outbound"` |
+| `mail:transport` | string | no | Transport family where not email, e.g. `"sms"`, `"whatsapp"`. Absent means email |
+
+**Mapping RFC 5322 onto Event fields (normative for the profile):**
+
+| RFC 5322 | OMS field | Note |
+|---|---|---|
+| Thread | `session_id` | The thread **is** the session. §28.6 already reconstructs a conversation from `session_id`; a mail thread is that conversation, so it MUST NOT get a parallel identifier |
+| `In-Reply-To` | `parent_message_id` **and** `mail:in_reply_to` | The two differ and both are needed: `parent_message_id` is the **content address** of the parent grain (resolvable in this memory), while `mail:in_reply_to` is the transport's `Message-ID` (resolvable at the transport, and the only form available when the parent has not been ingested) |
+| `Message-ID` | `mail:message_id` | Never the grain's content address. A resent or re-ingested message keeps its `Message-ID` while its grain address depends on the bytes stored |
+| `From` / `To` / `Cc` | `mail:from` / `mail:to` / `mail:cc` | Where an agent asserts facts *about* a correspondent, the identity also belongs in `subject`, so it is reachable by subject selection (§28.4.4) |
+| Body | `content` | With `role` set as for any Event |
+
+**Normative:**
+- A grain carrying `mail:` fields MUST declare `"profile:mail"` in
+  `structural_tags`.
+- `mail:message_id` MUST NOT be used as, or derived into, a content address.
+- Where a mail message is stored on behalf of an identifiable correspondent,
+  that correspondent SHOULD appear in `subject` — mail addresses are personal
+  data, and a correspondent reachable only through a `context` key is not
+  reachable by subject erasure or disclosure (§28.4.4, which reaches structured
+  references, not opaque body fields).
+- `mail:bcc` MUST NOT be populated from a received message: a recipient that
+  can see a blind-copy list has been handed a disclosure the sender did not
+  make.
+
+> **Status:** this profile is specified ahead of a reference implementation.
+> Unlike the rest of the 1.6 draft it was not written from working code, and
+> the field set should be read as a starting point for comment rather than as
+> settled vocabulary.
+
 ### A.7 Integration Profile (`int:`)
 
 **Tag:** `"profile:integration"` | **Namespace prefix:** `int:`
@@ -3331,7 +4026,7 @@ Applies to grains that represent REST API connectors, tool catalog entries, webh
 | `int:sunset_date` | string | no | ISO 8601 date when this action will be removed |
 | `int:content_type` | string | no | Request content type if non-default (e.g., `"application/x-www-form-urlencoded"`) |
 
-**Trigger-specific fields** (used in Observation grains with `observer_type` starting with `"trigger:"`; see §27.6):
+**Trigger-specific fields** (connector transport configuration on a Trigger grain's `config` map, §8.13):
 
 | Field | Type | Used By | Description |
 |---|---|---|---|
@@ -3344,6 +4039,7 @@ Applies to grains that represent REST API connectors, tool catalog entries, webh
 | `int:timezone` | string | schedule | IANA timezone (e.g., `"America/New_York"`) |
 | `int:config_schema` | map | all | JSON Schema for trigger configuration |
 | `int:event_schema` | map | all | JSON Schema for emitted events |
+| `int:allowed_outbound_hosts` | string[] | all | URL prefixes a connector may reach. Scheme, host and port all take part in the match; `*.example.com` covers subdomains but not the apex. An absent key is unrestricted; an empty array denies everything — the two are different statements. A bare `*` SHOULD be refused: it lets a declaration appear policed while permitting every destination |
 
 **Normative:**
 - Grains with `"profile:integration"` SHOULD include `int:connector` and `int:auth_type`.
@@ -3714,7 +4410,31 @@ footer        = 32OCTET  ; SHA-256 checksum
   "icron": "int:cron_expression",
   "itz": "int:timezone",
   "icfg": "int:config_schema",
-  "ievt": "int:event_schema"
+  "ievt": "int:event_schema",
+  "iaoh": "int:allowed_outbound_hosts"
+}
+```
+
+**Trigger-Specific Fields (§8.13):**
+
+```json
+{
+  "aknd": "kind",
+  "twf": "workflow",
+  "tcon": "connector",
+  "tscp": "scope",
+  "tena": "enabled",
+  "tdk": "dedup_key",
+  "tint": "interval_secs",
+  "tcron": "cron",
+  "tat": "at_ms",
+  "tpred": "predicate",
+  "tmem": "members",
+  "tcorr": "correlate",
+  "twin": "window_ms",
+  "tconc": "concurrency",
+  "tcatch": "catchup",
+  "tcfg": "config"
 }
 ```
 
@@ -3728,7 +4448,7 @@ footer        = 32OCTET  ; SHA-256 checksum
 |---------|------------|
 | Art. 5 (Data minimization) | `user_id` field enables per-person scope |
 | Art. 12-23 (Rights) | Structured data format for automated response |
-| Art. 17 (Erasure) | Crypto-erasure via key destruction |
+| Art. 17 (Erasure) | Crypto-erasure via key destruction; subject-scoped erasure expressible as CAL `FORGET SUBJECT` on Tier-2 hosts (§28.4, CAL §8.14) |
 | Art. 25 (Privacy by design) | Provenance and audit built-in |
 | Art. 30 (Records of processing) | `provenance_chain` and `created_at` timestamps support records-of-processing obligations |
 | Art. 32 (Security) | COSE signing, AES-256-GCM encryption |
@@ -3846,7 +4566,7 @@ content_address = sha256(blob).hex()
 
 ---
 
-**Document Status:** This is the v1.5 revision of the .mg format specification. It adds the dedicated **Recommendation** grain type (`0x0C`, §8.12) — a governed, auditable proposal to change memory or agent configuration, with a supersession-based content model and an audit-grain lifecycle — realized from the reserved range following the Skill (`0x0B`) precedent; byte values `0x01`–`0x0B` are unchanged, so existing content addresses remain valid. (The prior v1.4 revision renamed `belief`→`fact` (`0x01`) and `action`→`tool` (`0x05`), redesigned the Workflow grain as a directed graph, added the `embedding_text` common field, and added the Skill grain type (`0x0B`, §8.11).) Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
+**Document Status:** This is the **v1.6 draft** of the .mg format specification, open for comment. It adds the **Trigger** grain type (`0x0D`, §8.13) and its execution contract (§27.8), pseudonymized egress (§10.5), the authorization model (§12.6), the host metadata table (§28.4.1), the `cas:` URI scheme (§7.1.1) with blob operations and their erasure obligations (§28.4.2–§28.4.3), the subject-reachability conformance requirement (§28.4.4), and the `mail:` domain profile (Appendix A.8); it removes §27.6 and `Workflow.trigger`. (The prior v1.5 revision added the dedicated **Recommendation** grain type (`0x0C`, §8.12) — a governed, auditable proposal to change memory or agent configuration, with a supersession-based content model and an audit-grain lifecycle — realized from the reserved range following the Skill (`0x0B`) precedent.) Byte values `0x01`–`0x0C` are unchanged, so existing content addresses remain valid. (The v1.4 revision renamed `belief`→`fact` (`0x01`) and `action`→`tool` (`0x05`), redesigned the Workflow grain as a directed graph, added the `embedding_text` common field, and added the Skill grain type (`0x0B`, §8.11).) Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
-**Last Updated:** 2026-08-03
+**Last Updated:** 2026-08-19
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)

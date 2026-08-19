@@ -1,7 +1,14 @@
-# CAL (Context Assembly Language) Specification v1.2
+# CAL (Context Assembly Language) Specification v1.3
 
-**Status:** Standards Track | **Date:** 2026-08-03 | **Version:** 1.2 | **Classification:** Experimental
-**Part of:** [Open Memory Specification (OMS) v1.5](./SPECIFICATION.md)
+**Status:** Draft for Comment (CAL 1.3 RFC) | **Date:** 2026-08-10 | **Version:** 1.3-draft | **Classification:** Experimental
+**Part of:** [Open Memory Specification (OMS) v1.6 draft](./SPECIFICATION.md)
+
+> **Draft status.** Version 1.3 restates the safety pillar — from "non-destructive
+> by grammar" to **append-only by construction for evolution, authorization-gated
+> for destruction** — and adds the Tier 2 (Destroy) and Tier 3 (Control) statement
+> families. Every CAL 1.0–1.2 document remains valid, and a session without grants
+> is exactly the language 1.0–1.2 specified. Sections changed by this draft are
+> normative only upon release.
 ---
 
 ## Table of Contents
@@ -47,7 +54,7 @@
 
 The **Context Assembly Language (CAL)** is a companion specification to the Open Memory Specification (OMS). It defines a non-destructive, deterministic, LLM-native language for **assembling agent context from persistent memory**.
 
-CAL allows AI agents to **recall** memory, **assemble** context windows from multiple memory sources with budget constraints, and **evolve** memory -- but never **destroy** it. Every write is append-only and fully revertible. The core safety guarantee -- that CAL cannot destroy data -- is enforced at the grammar level and is a structural impossibility, not a policy check.
+CAL allows AI agents to **recall** memory, **assemble** context windows from multiple memory sources with budget constraints, **evolve** memory append-only, and -- for principals explicitly granted the capability -- **destroy** whole grains (tombstone or bulk erasure) and **control** who may do which of those. The core safety guarantee is two-part: *history cannot be rewritten* (structural -- no statement mutates a stored blob, no destruction takes a predicate), and *destruction and control execute only for an authorized principal* (Tier 2/3, fail-closed). A session without grants is exactly the non-destructive CAL that versions 1.0--1.2 specified -- that language is the floor of every conforming implementation, not its ceiling.
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in RFC 2119.
 
@@ -93,9 +100,10 @@ Key capabilities:
 
 ### 1.3 What CAL Is NOT
 
-- **Not SQL.** No tables, no joins, no DDL, no transactions.
+- **Not SQL.** No tables, no joins, no transactions. (Since 1.3, CAL does have a DCL -- `GRANT`/`REVOKE` -- the way SQL has since SQL-89.)
 - **Not Turing-complete.** No loops, no recursion, no persistent variables.
-- **Not a destructive language.** CAL cannot forget, erase, delete, or destroy grains. CAL cannot touch encryption keys, policies, or consent records. This is the core safety guarantee.
+- **Not an unguarded destructive language.** Destruction exists only as Tier 2: a tombstone of one grain by content address, or bulk erasure by identity or age -- never by predicate, and only for a principal granted `delete`/`erase`. CAL can never rewrite history: no statement mutates a stored blob. CAL cannot touch encryption keys or credentials -- ever, at any tier.
+- **Not an authentication or key-management system.** The host proves who a principal is, custodies keys, and transports files; CAL governs what an authenticated principal may do inside a memory.
 - **Not a transport protocol.** CAL defines a language. Transport (HTTP, gRPC, MCP, etc.) is implementation-specific.
 - **Not a rendering engine.** CAL's FORMAT clause specifies *semantic structure*, not pixel-level presentation. The agent or UI decides how to render.
 - **Not a storage mirror.** CAL output is a *projection* optimized for LLM consumption, not a serialization of the underlying OMS grain structure. Hashes, namespaces, and internal metadata stay in the machine envelope.
@@ -111,14 +119,15 @@ CAL's safety model maps directly to git:
 | `git add` + `git commit` (new file) | `ADD` | No (append-only) | Yes (Tier 1) |
 | `git commit` (amend existing) | `SUPERSEDE` | No (append-only) | Yes (Tier 1) |
 | `git revert` | `REVERT` | No (creates new commit) | Yes (Tier 1) |
-| `git reset --hard` | Store-level `delete` | **Yes** (destroys data) | **No** |
+| `git reset --hard` | -- (rewrites history) | **Yes** | **No -- structurally impossible** |
+| Repo deletion under admin rights | `FORGET` / `PURGE` | **Yes** (whole grains, one-way) | Tier 2 (authorization-gated) |
 | `git push --force` | Crypto-erasure | **Yes** (destroys keys) | **No** |
 
-The line between Tier 0/1 (in CAL) and Tier 2 (not in CAL) is: **can the operation be undone by another append-only operation?** If yes, it is safe for CAL. If no, it stays out.
+The line between the append-only tiers (0/1) and Tier 2 is: **can the operation be undone by another append-only operation?** If yes, it needs no special authority. If no -- a tombstone or an erasure -- it executes only for a principal explicitly granted it, it writes an audit Observation, and it is final: destruction takes a hash, an identity, or an age, never a predicate, and there is no un-forget. Key destruction stays out of the language entirely.
 
 ### 1.5 Relationship to OMS
 
-CAL operates on the 12 grain types defined by OMS v1.5: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill, Recommendation. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
+CAL operates on the 13 grain types defined by OMS v1.6: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill, Recommendation, Trigger. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
 
 CAL extends the Store Protocol Convention defined in OMS §28.4 ([SPECIFICATION.md](./SPECIFICATION.md)) with a formal query language. Where OMS defines the `query`, `search`, and `supersede` store operations, CAL provides a structured, deterministic syntax for invoking them safely.
 
@@ -128,31 +137,38 @@ CAL extends the Store Protocol Convention defined in OMS §28.4 ([SPECIFICATION.
 
 ### 2.1 The Core Guarantee
 
-> **CAL cannot destroy data. This is not a policy check. It is a structural impossibility.**
+> **CAL cannot rewrite history. This is not a policy check. It is a structural impossibility.**
 >
-> CAL *can* evolve data -- by creating new grains that supersede old ones. But the old grains survive. Every evolution is traceable and revertible. Nothing is ever deleted.
+> CAL *can* evolve data -- by creating new grains that supersede old ones; the old grains survive, and every evolution is traceable and revertible. Since 1.3, CAL *can also* destroy whole grains -- a tombstone by content address, or bulk erasure by identity or age -- but **only** for a principal explicitly granted that verb, only with an audit Observation written, and only in a shape the grammar bounds: **a hash, an identity, or an age -- never a predicate, and never a key.** For any session without such grants, CAL is exactly the non-destructive language of versions 1.0--1.2.
 
 The guarantee is enforced at three reinforcing levels:
 
 | Level | Mechanism | What It Prevents |
 |-------|-----------|-----------------|
-| **Grammar** | The EBNF grammar has no production rules for destructive operations | Parser cannot produce destructive AST nodes |
-| **Type System** | `CalStatement` is a closed enum with exactly 12 variants: `Recall`, `Assemble`, `SetOp`, `Exists`, `History`, `Explain`, `Describe`, `Batch`, `Add`, `Supersede`, `Revert`, `Coalesce`. | No code path from AST to any destructive method |
-| **API Surface** | CAL executor receives a constrained facade, not the full store | Destructive methods (delete, key destruction) are structurally inaccessible |
+| **Grammar** | No production mutates a stored blob; no destruction production accepts a predicate (`FORGET WHERE` does not parse); no key/credential vocabulary exists | Parser cannot produce a history-rewriting or predicate-destruction AST node |
+| **Type System** | `CalStatement` is a closed, per-tier statement set (§8). Destruction variants exist only in the Tier 2 family; adding any other destructive variant requires modifying this specification | No code path from a read/evolve AST to any destructive method |
+| **Authorization + API Surface** | The executor receives a constrained facade; destructive facade methods execute only after the session principal's grants (OMS §12.6) allow the statement's verb; key management is never on the facade | Destruction without an authorized principal is refused fail-closed; key destruction is structurally inaccessible |
 
-### 2.2 Three-Tier Capability Model
+### 2.2 Four-Tier Capability Model
 
-| Tier | Name | What It Can Do | How It Is Enforced |
-|------|------|---------------|-------------------|
-| **Tier 0** | Read (default) | Query, count, explain, assemble, describe, batch. Cannot modify anything. | Grammar + type system. Default for all CAL sessions. |
-| **Tier 1** | Evolve (opt-in) | Add new grains, supersede existing grains, revert supersessions, view history. Append-only; never deletes. | Separate grammar extension, explicit server opt-in, separate capability token with write quotas. |
-| **Tier 2** | Lifecycle | Erasure, key rotation, policy changes, consent management. | **Does not exist in CAL.** No grammar, no AST, no parser extension, no config flag. Only available through implementation-specific APIs (REST, gRPC, CLI, etc.). |
+| Tier | Name | What It Can Do | Gate |
+|------|------|---------------|------|
+| **0** | Core (default) | Query, count, explain, assemble, describe, batch. Cannot modify anything. | None. Default for all CAL sessions. |
+| **1** | Evolve (opt-in) | Add new grains, supersede, revert, view history. Append-only; never deletes. | Server opt-in; `write`/`supersede` verbs where Tier 3 is implemented, capability token with write quotas otherwise. |
+| **2** | Destroy | `FORGET <hash>`, `FORGET SUBJECT`, `PURGE OLDER THAN`. Whole-grain tombstone and bulk erasure -- one-way, audited. | `delete`/`erase` verbs. Requires *an* authorization model: host-defined authorization suffices (Tier 2 without Tier 3 is legal). A host with no authorization model MUST refuse Tier 2. |
+| **3** | Control | `GRANT`/`REVOKE` (DCL), the governance lifecycle (`APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP`), the definition surface (`DEFINE QUERY`/`DROP QUERY`, `DEFINE TEMPLATE`/`DROP TEMPLATE`), principal-bound sessions. | `admin` and `loop.*` verbs; implies the grant model (OMS §12.6) that Tier 2 consumes. |
 
-### 2.3 Formal Safety Proofs
+**Tiers gate operations, not portability.** Interoperability rides the `.mg` file and Tier-0 reads: any Core implementation can read any memory. A read-only implementation declares Tier 0 and remains fully conformant forever -- nothing in Tier 2/3 is required of it. Hosts declare their tiers, and `DESCRIBE capabilities` MUST report them, so an agent (or a test suite) learns what it may attempt before attempting it.
 
-**"CAL cannot delete data because..."** The `CalStatement` enum has 12 variants. The executor's `match` is exhaustive (compiler-verified in statically typed languages). None invoke a delete or forget operation. Adding a delete variant requires modifying the specification.
+### 2.3 Formal Safety Claims
 
-**"CAL cannot trigger erasure because..."** Erasure requires access to key management or store-level delete operations. The CAL executor facade exposes only: `recall()`, `count()`, `exists()`, `add()`, `supersede()`, `revert()`, `get_history()`, `assemble()`, `describe()`. No key management or delete methods are accessible.
+**"CAL cannot rewrite history because..."** No statement mutates a stored blob. `SUPERSEDE` and `REVERT` create new grains and update index-layer fields only; `FORGET` tombstones a whole grain (the store's compliance `delete`, OMS §28.4) and is **one-way** -- there is no `UNFORGET`, and a host MUST NOT provide an un-tombstone mechanism. Additions roll back by *retraction* (a supersession with `invalidation_type: "retraction"`); tombstones and erasure are final.
+
+**"CAL destruction cannot happen without an authorized principal because..."** Every Tier-2 statement executes only after the session principal's grants allow its verb (`delete` for `FORGET <hash>`, `erase` for `FORGET SUBJECT`/`PURGE`). Sessions without grants are Tier 0/1. Enforcement is fail-closed: an unknown principal, an absent grant, or a host without an authorization model all refuse. Every Tier-2 execution writes an audit Observation grain (§8.14.4).
+
+**"CAL cannot destroy by predicate because..."** The destruction grammar accepts exactly three target shapes: a content address, a subject identity, or an age window. There is no production for `FORGET WHERE` or any filter-driven deletion, so a single statement's blast radius is always explicit in its text.
+
+**"CAL cannot trigger key destruction because..."** Crypto-erasure requires key management, and no key vocabulary exists in the grammar (§2.4) and no key method exists on the executor facade. Keys and credentials are host objects at every tier.
 
 **"CAL ADD cannot destroy data because..."** ADD creates a new grain via the OMS store `put` operation (OMS §28.4). It does not modify or reference any existing grain. The grain count increases by one.
 
@@ -166,19 +182,40 @@ The guarantee is enforced at three reinforcing levels:
 
 ### 2.4 Grammar-Level Exclusions
 
-The following tokens do **not exist** in CAL's lexer or grammar:
+The following tokens do **not exist** in CAL's lexer or grammar, at any tier:
 
 ```
-DELETE, DROP, FORGET, ERASE, DESTROY, PURGE, TRUNCATE,    -- Destructive
+DELETE, ERASE, DESTROY, TRUNCATE,                           -- Predicate/unbounded destruction
 INSERT, CREATE, WRITE, STORE,                               -- Unconstrained creation
-KEY, ENCRYPT, DECRYPT, ROTATE, MASTER, DEK, SECRET,        -- Key management
-POLICY, SEAL, UNSEAL, GRANT, REVOKE, CONSENT, RESTRICT,    -- Policy/auth
+KEY, ENCRYPT, DECRYPT, ROTATE, MASTER, DEK, SECRET, TOKEN,  -- Key/credential management
+POLICY, SEAL, UNSEAL, CONSENT, RESTRICT,                    -- Sealed policy / consent records
 SCHEMA, PARTITION, INDEX, MIGRATION                         -- Schema
 ```
 
-If these appear in a query, they are parse errors, not recognized keywords.
+If these appear in a query, they are parse errors, not recognized keywords. This list is permanent: no future tier unblocks it. (`POLICY` here means the sealed policy and loop-policy *writes*; the read-only `DESCRIBE policy` target is an identifier, not this keyword.)
 
-Note: `ADD`, `SUPERSEDE`, `REVERT`, `SET`, and `REASON` are Tier 1 keywords. The **parser** always recognizes them (so that `EXPLAIN ADD ...` works as a dry-run even when Tier 1 execution is disabled). However, the **executor** rejects non-EXPLAIN Tier 1 statements when Tier 1 is disabled, returning `CAL-E044: Tier1NotEnabled`. This two-layer approach ensures `EXPLAIN` can always preview evolve operations without risk.
+**Changed in 1.3:** `FORGET` and `PURGE` moved from this list to the Tier 2 keyword set, and `GRANT`/`REVOKE` to the Tier 3 keyword set (§3.2). The block on them existed to force a specification-level decision before any destructive or control surface entered the language -- this revision is that decision, and the statements it admits are bounded by §2.1--§2.3.
+
+**Also changed in 1.3 -- `DROP`, and why the permanence claim survives it.**
+`DROP` leaves this list, admitted by a production with a **closed two-target
+set**: `DROP TEMPLATE` (§10.6.3) and `DROP QUERY` (§8.18.4). Neither target is
+memory. A template and a saved query are *host metadata* -- definitions the
+memory carries so they travel with the file (OMS §28.4.1), never grains, never
+content-addressed, never returned by a read. There is no production by which
+`DROP` reaches a grain, so the claim this list encodes -- that no CAL statement
+destroys memory outside the audited, authorization-gated Tier-2 shapes -- is
+unchanged. What was permanent was the exclusion of unbounded destruction *of
+memory*; the token was blocked as the nearest available proxy for that, and
+this revision replaces the proxy with the property itself. Removing a
+definition is idempotent and lossless against memory: every grain the query
+ever recalled is still there, and re-running the `DEFINE` restores it exactly.
+
+`UNDEFINE` remains reserved (Appendix D) and unspecified. It was held for these
+semantics; `DROP TEMPLATE`/`DROP QUERY` are the spelling that shipped, so
+`UNDEFINE` stays reserved rather than becoming a second one -- an
+implementation MUST NOT accept it as an alias.
+
+Note: Tier 1/2/3 keywords are always **parsed** (so `EXPLAIN FORGET ...` works as a dry-run even where execution is unavailable). The **executor** rejects non-EXPLAIN statements above the session's effective tier: `CAL-E044: Tier1NotEnabled` for Tier 1, `CAL-E121`/`CAL-E122` for Tier 2/3 (§22). This two-layer approach ensures `EXPLAIN` can always preview an operation without risk.
 
 ---
 
@@ -199,7 +236,7 @@ ORDER, BY, ASC, DESC, WITH, EXPLAIN, SCOPE,
 UNION, INTERSECT, EXCEPT,
 SELECT, COUNT, FIRST, GROUP, SUBJECTS, OBJECTS, HASHES, PROJECT,
 INCLUDE, EXCLUDE, IS, NULL, TRUE, FALSE,
-EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE,
+EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE, REPORT,
 ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, AS,
 FOR, FROM, BUDGET, PRIORITY, FORMAT,
 LET, THREAD,
@@ -213,6 +250,27 @@ CAL                                                       -- version prefix
 ```
 ADD, SUPERSEDE, REVERT, SET, REASON
 ```
+
+**Tier 2 (Destroy) keywords (new in 1.3; always parsed; execution requires the `delete`/`erase` verb -- see sections 2.2 and 8.13):**
+```
+FORGET, PURGE, SUBJECT, OLDER, THAN, TYPE, BECAUSE
+```
+
+**Tier 3 (Control) keywords (new in 1.3; always parsed; execution requires the `admin`/`loop.*` verbs -- see sections 8.14 and 8.15):**
+```
+GRANT, REVOKE, ON, TO, SHOW, GRANTS, PRINCIPAL,
+APPROVE, REJECT, APPLY, ROLLBACK, RUN, LOOP, FULL,
+QUERY, QUERIES, DESCRIPTION, DROP                         -- definition surface (§8.18, §10.6.3)
+```
+
+`RUN` serves two statements distinguished by their next token: `RUN LOOP`
+(§8.16) and `RUN "<name>"` (§8.18.3). A saved query name is a **string
+literal**, so the two never collide -- `LOOP` is a keyword and can never be a
+quoted name.
+
+`SUBJECT` is shared: `FORGET SUBJECT` is Tier 2, and `REPORT SUBJECT` (§8.19) is the Tier-0 read over the same selector. `REPORT` itself is a Tier-0 keyword -- disclosure is a read at every tier, and a host that has disabled destruction still answers access requests.
+
+`BECAUSE` was already an alias of `REASON` in `reason_clause`; Tier 2/3 statements conventionally write `BECAUSE`, and this specification uses that spelling for them throughout. `DEFINE ROLE` is **reserved but not specified** in 1.3 -- role bundles are deferred to a future revision; the 1.3 grant surface is verbs-only.
 
 **Relation category keywords:**
 ```
@@ -235,7 +293,7 @@ recall_priority, epistemic_status
 ```
 role, session_id, parent_message_id, model_id, content,
 context, plan,
-trigger, nodes, edges, bindings, retries,
+nodes, edges, bindings, retries,
 tool_name, tool_phase, is_error, tool_call_id,
 observer_id, observer_type,
 goal_state, assigned_agent, deadline, depends_on,
@@ -285,14 +343,22 @@ extractor       = "SUBJECTS" | "OBJECTS" | "HASHES" ;
 
 statement       = explain_stmt | recall_stmt | assemble_stmt | set_stmt
                 | exists_stmt | history_stmt | describe_stmt | batch_stmt
-                | coalesce_stmt | define_template_stmt
-                | add_stmt | supersede_stmt | revert_stmt ;
+                | coalesce_stmt | run_query_stmt | report_subject_stmt
+                | add_stmt | supersede_stmt | revert_stmt
+                | forget_stmt | purge_stmt                        (* Tier 2 *)
+                | grant_stmt | revoke_stmt | show_grants_stmt     (* Tier 3 *)
+                | approve_stmt | reject_stmt | apply_stmt
+                | rollback_stmt | run_loop_stmt
+                | define_template_stmt | drop_template_stmt       (* Tier 3 *)
+                | define_query_stmt | drop_query_stmt             (* Tier 3 *)
+                | rehydrate_stmt ;                                (* Tier 3 *)
 
 (* --- Tier 0: Read --- *)
 
 explain_stmt    = "EXPLAIN" , ( recall_stmt | assemble_stmt | set_stmt
                 | add_stmt | supersede_stmt | revert_stmt | batch_stmt
-                | coalesce_stmt ) ;
+                | coalesce_stmt
+                | forget_stmt | purge_stmt | grant_stmt | revoke_stmt ) ;
 
 set_stmt        = "(" , query , ")" , set_op , "(" , query , ")" ;
 set_op          = "UNION" | "INTERSECT" | "EXCEPT" ;
@@ -320,11 +386,14 @@ history_stmt    = "HISTORY" , ( hash_literal | parameter ) , [ diff_clause ]
 
 describe_stmt   = "DESCRIBE" , describe_target ;
 describe_target = "grain_types" | "fields" , [ grain_type_singular ]
-                | "capabilities" | "server" | "templates" | "grammar" ;
+                | "capabilities" | "server" | "templates" | "grammar"
+                | "PRINCIPAL" , principal                       (* Tier 3 read *)
+                | "loop" | "analyzers" | "outcomes" | "policy" ; (* Tier 3 reads *)
 
 batch_stmt      = "BATCH" , "{" , batch_entry , { "," , batch_entry } , "}" ;
 batch_entry     = label , ":" , ( recall_stmt | exists_stmt | history_stmt
                 | describe_stmt | coalesce_stmt ) ;
+                (* Tier 2/3 statements are NOT batch entries -- see §8.14.3 *)
 
 coalesce_stmt   = "COALESCE" , "(" , recall_stmt , "," , recall_stmt ,
                   { "," , recall_stmt } , ")" ;
@@ -398,7 +467,8 @@ relation_shortcut = "relation" , "IS" , relation_category ;
 domain_field_condition = domain_field , comparator , value ;
 
 domain_field    = domain_prefix , ":" , identifier ;
-domain_prefix   = "hc" | "legal" | "fin" | "rob" | "sci" | "con" | "int" ;
+domain_prefix   = "hc" | "legal" | "fin" | "rob" | "sci" | "con" | "int"
+                | "mail" ;   (* new in 1.3, OMS Appendix A.8 *)
 
 relation_category = "PREFERENCE" | "KNOWLEDGE" | "PERMISSION" | "INTERACTION"
                   | "AGENCY" | "LIFECYCLE" | "OBSERVATION" ;
@@ -415,7 +485,7 @@ grain_field_name = event_field | state_field | workflow_field
 
 event_field     = "role" | "session_id" | "parent_message_id" | "model_id" | "content" ;
 state_field     = "context" | "plan" ;
-workflow_field  = "trigger" | "node" | "binding" ;
+workflow_field  = "node" | "binding" ;
 action_field    = "tool_name" | "tool_phase" | "is_error" | "tool_call_id" ;
 observation_field = "observer_id" | "observer_type" ;
 goal_field      = "goal_state" | "assigned_agent" | "deadline" | "depends_on" ;
@@ -447,11 +517,13 @@ with_option     = "superseded" | "score_breakdown" | "explanation" | "provenance
                 | "dedup" , "(" , field_name , ")"
                 | "locale" , "(" , string_literal , ")"
                 | "cache" , "(" , "ttl" , "=" , positive_integer , ")"
+                | "anonymize" , "(" , anonymize_level , ")"
                 | extension_option ;
 diversity_spec  = "mmr" , [ "," , "lambda" , "=" , number ]
                 | "threshold" , "," , number ;
 consistency_level = "eventual" | "bounded" , "(" , number , ")" | "linearizable" ;
 disclosure_level = "summary" | "headlines" | "full" ;
+anonymize_level = "standard" | "strict" ;
 extension_option = "x_" , identifier , [ "(" , value_list , ")" ] ;
 
 pipeline        = { pipe_stage } ;
@@ -492,15 +564,70 @@ set_clause      = "SET" , evolve_field , "=" , value ;
 evolve_field    = "object" | "confidence" | "importance" | "tags" ;
 reason_clause   = ( "REASON" | "BECAUSE" ) , string_literal ;
 
+(* --- Tier 2: Destroy (new in 1.3) --- *)
+
+(* Tier 0: the read-only mirror of FORGET SUBJECT -- §8.19 *)
+report_subject_stmt = "REPORT" , "SUBJECT" , string_literal , [ with_clause ] ;
+
+forget_stmt     = "FORGET" , ( hash_literal | parameter ) , [ reason_clause ]
+                | "FORGET" , "SUBJECT" , string_literal ,
+                  [ with_clause ] , reason_clause ;
+purge_stmt      = "PURGE" , "OLDER" , "THAN" , duration_literal ,
+                  [ "TYPE" , grain_type_singular ] , reason_clause ;
+duration_literal = digit+ , ( "d" | "h" | "m" ) ;
+
+(* --- Tier 3: Control (new in 1.3) --- *)
+
+grant_stmt      = "GRANT" , verb_list , "ON" , ns_scope , "TO" , principal ,
+                  [ with_clause ] ;
+revoke_stmt     = "REVOKE" , verb_list , "ON" , ns_scope , "FROM" , principal ,
+                  [ with_clause ] ;
+show_grants_stmt = "SHOW" , "GRANTS" , [ "FOR" , principal ] ;
+rehydrate_stmt  = "REHYDRATE" , string_literal ,
+                  "WITH" , "mapping" , "(" , string_literal , ")" ;
+verb_list       = verb , { "," , verb } ;
+verb            = "read" | "write" | "supersede" | "delete" | "erase"
+                | "loop.run" | "loop.review" | "loop.apply" | "admin" ;
+ns_scope        = identifier | string_literal | "*" ;
+principal       = string_literal ;   (* e.g. "agent:support-bot" — quoted:
+                                        principal names carry ":" and "-",
+                                        which identifiers do not *)
+
+approve_stmt    = "APPROVE"  , ( hash_literal | parameter ) , reason_clause ;
+reject_stmt     = "REJECT"   , ( hash_literal | parameter ) , reason_clause ;
+apply_stmt      = "APPLY"    , ( hash_literal | parameter ) , reason_clause ;
+rollback_stmt   = "ROLLBACK" , ( hash_literal | parameter ) , reason_clause ;
+run_loop_stmt   = "RUN" , "LOOP" , [ "FULL" ] , [ with_clause ] ;
+
+(* --- Tier 3: the definition surface (new in 1.3) --- *)
+
+define_query_stmt = "DEFINE" , "QUERY" , query_name ,
+                    [ "(" , param_decl , { "," , param_decl } , ")" ] ,
+                    [ "DESCRIPTION" , string_literal ] ,
+                    "AS" , "{" , query_body , "}" ;
+param_decl        = parameter , [ "=" , value ] ;
+query_body        = statement ;   (* Tier 0 only -- §8.18.2 *)
+query_name        = string_literal ;
+
+drop_query_stmt    = "DROP" , "QUERY" , query_name ;
+drop_template_stmt = "DROP" , "TEMPLATE" , ( template_name | string_literal ) ;
+
+(* RUN of a saved query is Tier 0: it classifies as its body does (§8.18.3). *)
+run_query_stmt    = "RUN" , query_name ,
+                    [ "(" , param_bind , { "," , param_bind } , ")" ] ;
+param_bind        = parameter , "=" , value ;
+
 (* --- Workflow graph syntax --- *)
 
 workflow_add_stmt       = "ADD" , "workflow" , string_literal ,
-                          [ on_clause ] , graph_line , { graph_line } ,
+                          graph_line , { graph_line } ,
                           { bind_clause } , reason_clause ;
 workflow_supersede_stmt = "SUPERSEDE" , hash_literal ,
-                          [ on_clause ] , graph_line , { graph_line } ,
+                          graph_line , { graph_line } ,
                           { bind_clause } , reason_clause ;
-on_clause               = "ON" , string_literal ;
+(* `on_clause` removed in 1.3: it set OMS's `Workflow.trigger`, which 1.6
+   removes. A trigger is a Trigger grain that names its workflow (OMS §8.13).
+   "ON" remains a keyword, used by GRANT and REVOKE. *)
 bind_clause             = "BIND" , node_name , "=" , hash_literal ;
 
 graph_line              = node_or_group , { "->" , node_or_group , [ when_mod ] , [ repeat_mod ] } ;
@@ -540,11 +667,13 @@ positive_integer = digit+ ;
 
 grain_type_plural   = "facts" | "events" | "states" | "workflows" | "tools"
                     | "observations" | "goals" | "reasonings" | "consensuses"
-                    | "consents" | "skills" | "recommendations" ;
+                    | "consents" | "skills" | "recommendations"
+                    | "triggers" ;
 
 grain_type_singular = "fact" | "event" | "state" | "workflow" | "tool"
                     | "observation" | "goal" | "reasoning" | "consensus"
-                    | "consent" | "skill" | "recommendation" ;
+                    | "consent" | "skill" | "recommendation"
+                    | "trigger" ;
 ```
 
 ---
@@ -567,6 +696,7 @@ grain_type_singular = "fact" | "event" | "state" | "workflow" | "tool"
 | Consent | `consents` | `consent` | 0x0A |
 | Skill | `skills` | `skill` | 0x0B |
 | Recommendation | `recommendations` | `recommendation` | 0x0C |
+| Trigger | `triggers` | `trigger` | 0x0D |
 
 ### 5.2 Common Field Types
 
@@ -663,7 +793,6 @@ All Fact fields are in the common set (`subject`, `relation`, `object`, `confide
 
 | Field | Type | Operators | Notes |
 |-------|------|-----------|-------|
-| `trigger` | String | `=`, `!=` | Trigger condition (e.g., `"on:merge_to_main"`) |
 | `node` | String | `=` | Match workflows containing a specific node |
 | `binding` | String | `=` | Match workflows binding to a specific Tool grain hash |
 
@@ -745,6 +874,29 @@ All Fact fields are in the common set (`subject`, `relation`, `object`, `confide
 Recommendation grains are engine-emitted proposals and are **not CAL-addable** — like Events, Tools, and States, they are absent from the addable whitelist enforced by `CAL-E051` (Appendix C). `RECALL recommendations` reads the proposal queue, and lifecycle transitions occur only through the host's review/apply path (§8.12.1 of the OMS spec), never via `ADD`/`SUPERSEDE SET`.
 
 > **Note — why `rec_status` is type-scoped:** `verification_status` is a `meta_field_name` (§4), queryable on every grain type. `rec_status` is instead a `recommendation_field`, because it is meaningful only for this one type — a Recommendation's review state has no analogue on a Fact or an Event. Both are index-layer fields in OMS (§6.1 of the OMS spec); the asymmetry in CAL is deliberate scoping, not an oversight.
+
+#### Trigger (0x0D) -- `RECALL triggers`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `kind` | String | `=`, `!=`, `IN` | `"interval"`, `"schedule"`, `"once"`, `"polling"`, `"memory"`, `"webhook"`, `"manual"`, `"composite"` |
+| `workflow` | String | `=`, `IN` | Content address of the Workflow this trigger starts |
+| `connector` | String | `=`, `!=`, `IN` | External system name, e.g. `"gmail"` |
+| `scope` | String | `=`, `CONTAINS`, `STARTS WITH` | What is watched |
+| `enabled` | Boolean | `=`, `!=` | Whether the trigger is live |
+| `cron` | String | `=`, `CONTAINS` | Calendar expression |
+
+These are **first-class fields, not `context` keys**, which is the point: a
+trigger's cadence and target must be filterable. `RECALL triggers WHERE enabled
+= true AND connector = "gmail"` is the query this type exists to make possible,
+and it is why §8.13 of the OMS spec declares them rather than carrying them in a
+`context`-shaped map. Connector transport configuration remains in `config` and
+is not queryable.
+
+Operational state — when a trigger last fired, where its cursor is, whether it
+is currently claimed — is deliberately **not** in the grain and therefore not
+queryable through CAL. It is host-local (OMS §27.8) and does not travel with the
+memory.
 
 ### 6.4 Type-Specific ADD Extensions
 
@@ -830,6 +982,7 @@ OMS defines a standard `mg:` relation vocabulary. CAL provides first-class suppo
 | `mg:handed_off_to` | Interaction | Agent DID | Agent DID | Agent handoff |
 | `mg:depends_on` | Lifecycle | Goal | Goal | Goal dependency |
 | `mg:assigned_to` | Agency | Task | Agent DID | Task assignment |
+| `mg:step_action:<node_id>` | Workflow | Tool grain | Workflow hash | Execution record: which node of a plan this Tool grain ran (OMS §8.4). **Parameterized** |
 
 ### 7.2 Relation Category Shortcuts
 
@@ -860,11 +1013,17 @@ RECALL WHERE subject = "did:key:z6Mk..." AND relation IS PERMISSION
 
 The parser SHOULD validate `mg:` prefixed relation values against the known vocabulary. Unknown `mg:` relations produce warning `CAL-W001` (not an error).
 
+**Parameterized relations match by prefix.** A row marked *Parameterized* in
+§7.1 lists a prefix, not a value: `mg:step_action:node_3` is a member of the
+vocabulary. A validator matching only exact values warns `CAL-W001` on a
+relation OMS §8.4 defines normatively -- which is precisely what implementations
+did while this row was missing from the table.
+
 ---
 
 ## 8. Statement Semantics
 
-CAL/1 has **12 statement types** organized into three tiers:
+CAL/1 statements are organized into four tiers (§2.2):
 
 | Statement | Tier | Description |
 |-----------|------|-------------|
@@ -872,14 +1031,20 @@ CAL/1 has **12 statement types** organized into three tiers:
 | **ASSEMBLE** | 0 | Compose context from multiple sources with budget |
 | **EXISTS** | 0 | Check grain existence by content address |
 | **HISTORY** | 0 | Version history with AS OF and DIFF |
-| **EXPLAIN** | 0 | Execution plan preview |
-| **DESCRIBE** | 0 | Schema introspection |
+| **EXPLAIN** | 0 | Execution plan preview (any tier's statement, as dry-run) |
+| **DESCRIBE** | 0 | Schema introspection (`PRINCIPAL`/`loop`-family targets read Tier-3 state) |
 | **BATCH** | 0 | Multiple independent queries in one request |
 | **COALESCE** | 0 | Fallback chain of RECALL queries |
+| *Set operations* | 0 | `UNION`, `INTERSECT`, `EXCEPT` |
 | **ADD** | 1 | Create a new grain (append-only) |
 | **SUPERSEDE** | 1 | Create a new version of an existing grain |
 | **REVERT** | 1 | Restore a previous version |
-| *Set operations* | 0 | `UNION`, `INTERSECT`, `EXCEPT` |
+| **FORGET** | 2 | Tombstone one grain by hash, or erase a subject's grains (§8.14) |
+| **PURGE** | 2 | Age-scoped retention erasure (§8.14) |
+| **GRANT / REVOKE** | 3 | Confer or withdraw verbs on a namespace for a principal (§8.15) |
+| **SHOW GRANTS** | 3 (read) | List live grants (§8.15) |
+| **APPROVE / REJECT / APPLY / ROLLBACK** | 3 | Recommendation lifecycle transitions (§8.16) |
+| **RUN LOOP** | 3 | Trigger an analysis pass of the host's improvement engine (§8.16) |
 
 ### 8.1 RECALL (Tier 0)
 
@@ -916,6 +1081,30 @@ RECALL events THREAD "sess-123"
 -- Full thread containing a specific message
 RECALL events THREAD FROM sha256:a1b2c3d4...
 ```
+
+#### 8.1.2 WITH anonymize (new in 1.3)
+
+```sql
+RECALL facts WHERE subject = "caller:john" WITH anonymize("strict")
+```
+
+Requests pseudonymized results for this one query. **Strengthen-only**: the
+option MAY raise the treatment an active egress policy (OMS Section 10.5)
+would apply -- `"standard"` asserts the declared policy (a no-op where one
+is active), `"strict"` treats every category at redaction severity -- and
+MUST NOT weaken or disable a file-declared policy. Two reasons the
+weakening form does not exist, both load-bearing:
+
+1. Unknown WITH options warn-and-skip (Section 25 forward compatibility),
+   so on an older implementation this option silently does nothing. That is
+   survivable only because it was never the gate -- the file-declared
+   policy is.
+2. A weakening spelling would make every query author a policy author. The
+   file's declaration MUST outrank query text, or the policy is advisory.
+
+Implementations without anonymization support treat the option as unknown
+(warn-and-skip); consumers MUST NOT read the absence of the response's
+`anonymized` report as "values are safe".
 
 ### 8.2 ASSEMBLE (Tier 0)
 
@@ -965,6 +1154,22 @@ Token estimation is approximate by design. The response MUST report actual token
 | Max context_name length | 64 characters |
 | Max FOR string length | 256 characters |
 | ASSEMBLE timeout | 10,000ms |
+
+#### 8.2.1 Per-source anonymize override (new in 1.3)
+
+A named source MAY carry its own `WITH anonymize(...)`, same strengthen-only
+rule as Section 8.1.2: a mounted source's own file policy applies first, and
+the override can only add severity on top. This is the multi-file case where
+per-source treatment genuinely differs -- a mounted org replica may warrant
+stricter handling than the session's own memory.
+
+```sql
+ASSEMBLE briefing FOR "customer call prep"
+  FROM
+    work:       (RECALL facts ABOUT "caller:john" LIMIT 20) WITH anonymize("strict"),
+    background: (RECALL org.facts ABOUT "acme" LIMIT 10)
+  BUDGET 1500 tokens
+```
 
 ### 8.3 EXISTS (Tier 0)
 
@@ -1060,32 +1265,27 @@ Workflows use a dedicated graph syntax instead of SET clauses. The graph is expr
 ```sql
 -- Simple linear workflow
 ADD workflow "nightly backup"
-  ON "cron 0 2 * * *"
   snapshot -> compress -> upload
   REASON "automate database backups"
 
 -- Parallel fork/join
 ADD workflow "code review"
-  ON "PR opened"
   lint -> (security_review, compliance_review) -> evaluate
   REASON "parallel review gates"
 
 -- Conditional branching
 ADD workflow "release gate"
-  ON "review complete"
   evaluate -> implement WHEN "approved"
   evaluate -> reject WHEN "rejected"
   REASON "approval-based routing"
 
 -- Retry on failure
 ADD workflow "resilient deploy"
-  ON "release"
   build -> deploy * 3 -> notify
   REASON "retry deploy up to 3 times"
 
 -- Full pipeline with bindings
 ADD workflow "release pipeline"
-  ON "merge to main"
   build -> (unit_test, lint) -> integration_test
   integration_test -> stage_deploy * 3
   stage_deploy -> approval
@@ -1099,7 +1299,7 @@ ADD workflow "release pipeline"
   REASON "standard release process"
 ```
 
-**Clause order (fixed):** name → ON → graph lines → BIND → REASON
+**Clause order (fixed):** name → graph lines → BIND → REASON
 
 **Graph operators:**
 
@@ -1135,7 +1335,6 @@ SUPERSEDE sha256:target_hash
 
 ```sql
 SUPERSEDE sha256:abc123...
-  ON "merge to main"
   build -> (unit_test, lint, security_scan) -> integration_test
   integration_test -> canary_deploy * 3
   canary_deploy -> approval
@@ -1209,6 +1408,402 @@ COALESCE(
 ```
 
 **Constraints:** Max 5 branches. All branches MUST be RECALL statements.
+
+### 8.14 FORGET and PURGE (Tier 2 -- new in 1.3)
+
+Destruction of whole grains, in exactly three shapes. Maps to the OMS store's
+compliance `delete` operation (OMS §28.4) and host bulk-erasure operations.
+
+```sql
+FORGET sha256:a1b2c3d4...                                   -- one grain, by address
+FORGET sha256:a1b2c3d4... BECAUSE "user retracted consent"  -- reason optional here, recorded when given
+FORGET SUBJECT "patient-789" BECAUSE "GDPR Art. 17 request" -- every grain referencing an identity
+FORGET SUBJECT "patient-789" WITH text_mentions BECAUSE "…" -- + grains whose indexed text mentions it
+PURGE OLDER THAN 90d BECAUSE "retention policy"             -- age-scoped sweep
+PURGE OLDER THAN 30d TYPE event BECAUSE "transcript TTL"    -- age + one grain type
+```
+
+#### 8.14.1 Semantics
+
+- `FORGET <hash>` tombstones one grain: it leaves the default recall path
+  permanently. Requires the `delete` verb. `BECAUSE` is OPTIONAL on this form
+  (it predates 1.3 in deployed dialects and MUST remain valid without a
+  reason) and MUST be recorded in the audit Observation when given.
+- `FORGET SUBJECT <id>` erases every grain referencing the identity --
+  history included -- per the host's erasure procedure; `WITH text_mentions`
+  extends the scope to grains whose indexed text mentions the identity.
+  Requires the `erase` verb. `BECAUSE` is REQUIRED (parse error without).
+- `PURGE OLDER THAN <duration> [TYPE <t>]` erases grains older than the
+  window, optionally limited to one grain type. Requires the `erase` verb.
+  `BECAUSE` is REQUIRED.
+- All three are **one-way** (§2.3): there is no `UNFORGET`, and a host MUST
+  NOT offer an un-tombstone or un-erase mechanism through any interface.
+- An erasure execution SHOULD produce the host's erasure report; the audit
+  Observation (§8.14.4) references it. Where the erased grains referenced
+  content-addressed attachments, erasure MUST also reclaim the ones no
+  surviving grain references, and the report MUST carry that count separately
+  from the grain count (OMS §28.4.3). A statement that erased a subject's
+  grains and left the subject's documents on disk has not erased the subject.
+
+#### 8.14.2 Authorization
+
+Tier-2 statements execute only when the session principal (§18.4) holds the
+required verb for the target namespace, resolved from the memory's own grant
+grains (OMS §12.6) or, on a Tier-2-without-Tier-3 host, from the host's
+authorization model. Enforcement is fail-closed: no principal, no grants, or
+no authorization model at all → `CAL-E121`/`CAL-E122`, nothing executes.
+A host session designated *owner* (OMS §12.6.4) is exempt from grant lookup.
+
+#### 8.14.3 Context restrictions
+
+Tier-2 and Tier-3 statements MUST be top-level, single statements. They are
+refused inside `BATCH`, inside saved-query bodies, and inside a
+Recommendation's `proposal_cal` **except** that a `proposal_cal` MAY carry
+Tier-2 statements where the host authorizes destructive proposals (OMS
+§8.12); governance statements (§8.16) are refused inside `proposal_cal`
+unconditionally. `EXPLAIN` of any Tier-2/3 statement is always available as
+a dry-run and executes nothing.
+
+#### 8.14.4 The Tier-2 audit Observation
+
+Every Tier-2 execution MUST write one audit Observation grain in the memory
+it acted on, following the audit pattern of OMS §8.12.1: `observer_id` = the
+session principal, `observer_type` from the principal's host record (§18.4),
+the statement's verb and target (hash, subject identity, or age window) and
+the `BECAUSE` reason (where given) carried in the Observation's `object`,
+and `derived_from` referencing the erasure report where one exists. The
+audit grain is ordinary memory: it replicates with the file and is
+`RECALL`-able. A destruction that cannot write its audit Observation MUST
+fail before destroying anything.
+
+### 8.15 GRANT, REVOKE, SHOW GRANTS (Tier 3 -- new in 1.3)
+
+The control plane: confer or withdraw verbs on a namespace for a principal.
+Grants are stored **in the memory itself** as grant grains (OMS §12.6) --
+they travel, replicate, and are queryable like any other memory.
+
+```sql
+GRANT read, write ON caller TO "agent:support-bot"
+GRANT delete ON * TO "user:anna" WITH because("support rotation")
+REVOKE write ON caller FROM "agent:support-bot" WITH because("offboarded")
+SHOW GRANTS                          -- every live grant
+SHOW GRANTS FOR agent:support-bot    -- one principal's live grants
+DESCRIBE PRINCIPAL agent:support-bot -- effective verbs per namespace
+```
+
+#### 8.15.1 Semantics
+
+- **Verbs:** `read`, `write`, `supersede`, `delete`, `erase`, `loop.run`,
+  `loop.review`, `loop.apply`, `admin`. The verb set is closed in 1.3.
+- **Scope:** one namespace or `*`. The memory axis is implicit -- a grant
+  governs the memory it is stored in, never another memory.
+- **Principals** are opaque names (`user:anna`, `agent:support-bot`).
+  Identity *binding* -- proving a caller is that principal -- is the host's
+  job (§18.4); CAL never sees or carries credentials.
+- `GRANT` writes a grant grain (OMS §12.6.2). `REVOKE` retracts the covering
+  grant grain(s) by supersession -- a full revoke retracts, a partial revoke
+  supersedes with the reduced grant -- so grant history is append-only and
+  nothing is deleted. GRANT/REVOKE are therefore **Tier-1-shaped writes
+  gated by Tier-3 authority**, not destructive operations.
+- **Who may GRANT:** a principal holding `admin` (on the target namespace),
+  or the owner session. Every `erase` grant is explicit -- if a future
+  revision defines role bundles, no bundle may include `erase`.
+  There is no `WITH GRANT OPTION`.
+- `SHOW GRANTS` is a read (sugar over `RECALL` of the PERMISSION relation
+  category); it requires only `read` on the authz namespace.
+
+#### 8.15.2 Fail-closed resolution
+
+A session principal's effective rights are the union of live (unsuperseded)
+grant grains naming it, intersected with the statement's target namespace.
+Unknown principal or empty result → Tier 0/1 only. A memory containing no
+grant grains confers nothing on anyone except the owner session.
+
+### 8.16 Governance statements (Tier 3 -- new in 1.3)
+
+The Recommendation lifecycle (OMS §8.12), expressible in the language whose
+data it governs.
+
+```sql
+RUN LOOP                                      -- incremental analysis pass
+RUN LOOP FULL WITH min_new(3), if_stale("6h") -- full sweep, gated
+APPROVE sha256:9c41... BECAUSE "matches our deploy policy"
+REJECT  sha256:9c41... BECAUSE "false positive - seasonal"
+APPLY   sha256:9c41... BECAUSE "approved in standup"
+ROLLBACK sha256:9c41... BECAUSE "regressed at the 30-day checkpoint"
+DESCRIBE loop        -- engine health   (read)
+DESCRIBE analyzers   -- registered analyzers (read)
+DESCRIBE outcomes    -- the Verify gate's measurements (read)
+DESCRIBE policy      -- the effective host policy (read)
+```
+
+#### 8.16.1 Semantics and gates
+
+- `BECAUSE` is REQUIRED on every lifecycle transition -- a missing reason is
+  a **parse error**, and hosts MUST additionally validate it non-empty at
+  execution. The reason lands in the transition's audit Observation
+  (OMS §8.12.1).
+- Verb mapping: `RUN LOOP` requires `loop.run`; `APPROVE`/`REJECT` require
+  `loop.review`; `APPLY`/`ROLLBACK` require `loop.apply`; a destructive
+  apply additionally requires the `delete`/`erase` verb its proposal needs
+  (two-key property).
+- **Self-approval MUST be refused** against the recommendation's creating
+  actor and, for a recommendation of LLM or external-command origin, against
+  the principal that triggered the run that authored it.
+- **Observer type MUST derive from the session principal's host record**
+  (§18.4) -- never from statement text. A statement cannot claim to be
+  human.
+- `RUN LOOP` carries no credentials and no model configuration -- analysis
+  backends are host-configured. `WITH` options are limited to gating knobs
+  (e.g. `min_new(n)`, `if_stale("6h")`).
+- Loop *policy* writes (auto-apply grants, analyzer deny-lists) are
+  permanently outside CAL: the policy is what gates these statements, and a
+  language able to edit its own gate would be self-licensing.
+- Governance statements are refused inside `BATCH`, saved-query bodies, and
+  `proposal_cal` (§8.14.3) -- no one-round-trip approve-and-apply macro, and
+  no recommendation whose payload approves other recommendations.
+
+### 8.17 REHYDRATE (Tier 3 -- new in 1.3)
+
+```sql
+REHYDRATE "Hi [PERSON_1], I've verified pin [PIN_1]." WITH mapping("a1b2c3d4e5f60718")
+```
+
+The return leg of the pseudonymization round trip (OMS Section 10.5):
+replaces exact placeholder tokens in the text with their originals from the
+mapping the id names. Unmatched tokens are left intact and reported, never
+guessed.
+
+**Classification: Control -- stated rather than hidden, because rehydration
+is re-identification.** The statement MUST NOT classify as a plain read: an
+implementation with authorization MUST gate it on the `admin` verb (or an
+equivalent dedicated grant) and MUST write a Tier-2 audit Observation per
+execution carrying the revealed values' *fingerprints*, never the
+identities -- the same non-re-identifying audit rule bulk erasure follows
+(Section 21). An implementation whose statement classification is
+exhaustive-without-wildcard is forced to decide this at build time, which
+is the point.
+
+**Resolution.** The mapping id resolves against the session's live mappings
+first, then the file's sealed vault (OMS Section 10.5.2). An id whose
+mapping no longer exists is an error (CAL-E127), not an empty substitution
+-- silently returning the placeholders would be indistinguishable from a
+model echoing them.
+
+Refused inside `BATCH`, saved-query bodies, and `proposal_cal`, like every
+Tier 2/3 statement (Section 8.14.3).
+
+### 8.18 Saved queries (Tier 3 to define, Tier 0 to run -- new in 1.3)
+
+A **saved query** is a named, parameterized CAL body stored with the memory and
+executed by name. It exists so that prompt-assembly logic -- which `ASSEMBLE`
+runs on every turn, and which is edited far more often than the agent around it
+-- can live as a definition the memory carries rather than as a string literal
+compiled into a host.
+
+Versions 1.0--1.2 restricted saved-query bodies in four places (§8.14.3,
+§8.16.1, §8.17, `CAL-E125`) and made `query:<namespace>/<name>` a valid
+Recommendation `target_ref` (OMS §8.12) while defining no statement that
+creates one. This section is the missing definition; the restrictions that
+referenced it are unchanged and now have a referent.
+
+#### 8.18.1 Definitions are host metadata, not memory
+
+A saved query is **not a grain.** It is not content-addressed, it is not
+returned by `RECALL`, it does not participate in supersession, and defining one
+writes no grain. It is host metadata carried in the memory's own metadata table
+(OMS §28.4.1) under the reserved key prefix `qry:<name>`, one row per
+definition.
+
+That placement is the substantive design decision, and it is deliberate on both
+sides:
+
+- **Carried by the memory, not the client.** A saved query travels with the
+  `.mg` file. Every surface opening that memory -- CLI, MCP server, console,
+  language bindings -- sees the same set, so "which queries exist" is a
+  property of the memory rather than of whichever process happens to be asking.
+- **Not memory.** A definition is configuration. Making it a grain would put
+  editable operational config into an immutable, content-addressed,
+  replicating, erasure-relevant structure, and would put a query body into
+  every `RECALL` that did not ask for one.
+
+**Replication (normative).** Definitions MUST replicate with the memory (bundle
+and stream export/import), converging **latest-wins** on the definition's
+update time. Usage state MUST NOT replicate: a `last_run_at`-style
+last-execution stamp is a record of what one host did, not of what the
+definition *is*, and an incoming update MUST leave the local stamp intact. This
+is the same split §27.8 draws for triggers and §8.12 draws for governance
+state: **what a definition is replicates; where one host got to does not.**
+
+**Identity.** A saved query carries the two stamps OMS §28.4.1 requires of any
+stored definition: `updated_at` (the replication tiebreaker) and
+`definition_hash` (the SHA-256 identity of this revision's body). Both are
+reported by `DESCRIBE QUERIES` (§8.18.4). This is what makes
+`query:<namespace>/<name>` a pinnable Recommendation target (OMS §8.12) — a
+governed change to a saved query can name the revision it replaced and store an
+inverse that reinstates exactly that one.
+
+A point-in-time restore reconstructs grain history and MUST skip the
+definition registry -- a restore to last Tuesday is a statement about memory,
+not an instruction to revert an operator's query edits -- and MUST report that
+it did.
+
+An entry the running implementation cannot load (written by a newer revision,
+or against a limit since tightened) MUST be skipped with a warning rather than
+failing the open, and MUST be left in the file so another implementation can
+still read it.
+
+#### 8.18.2 DEFINE QUERY
+
+```sql
+DEFINE QUERY "session_prompt"($user, $session, $n = 10)
+  DESCRIPTION "standard session bootstrap"
+AS {
+  ASSEMBLE "session" FROM
+    profile: (RECALL facts  WHERE subject = $user),
+    recent:  (RECALL events WHERE session_id = $session RECENT $n)
+  BUDGET 1200 FORMAT sml
+}
+```
+
+Normative rules:
+
+1. **Bodies are Tier 0 only.** A body MUST contain exactly one statement, and
+   that statement MUST classify as Tier 0 (read). A Tier 1/2/3 statement in a
+   body is refused at definition time (`CAL-E136`). This is what makes `RUN`
+   itself a read (§8.18.3), and it is why the Tier-2/3 context restrictions
+   (§8.14.3) can name saved-query bodies without further qualification.
+2. **No recursion.** A body MUST NOT contain `RUN` (`CAL-E135`). Bodies compose
+   through subqueries and `ASSEMBLE` sources, not through each other; this
+   makes execution cost analyzable from the body's own text.
+3. **Define-time validation MUST parse the body as it would run.** An
+   implementation MUST parse the body at definition time, with the declared
+   parameters standing in at their call-site positions, and refuse a body that
+   fails (`CAL-E137`). A body whose parameter sits where the grammar demands a
+   literal (`RECENT $n`) is valid: the check substitutes before parsing, so
+   only a body that is malformed *however* it is bound is refused.
+
+   This rule is normative because of who pays for its absence. A stored query
+   that cannot parse is a latent failure whose first caller is typically an
+   unattended agent, long after its author has moved on. Validation at
+   definition time turns that into an error for the person who can still fix
+   it.
+4. **Redefinition replaces.** `DEFINE QUERY` on an existing name replaces the
+   definition and updates its revision stamp; it is not an error. There is no
+   definition history -- a saved query is configuration, and its audit trail is
+   the Recommendation lifecycle (OMS §8.12) where a governed change produced
+   it.
+5. **Authorization.** `DEFINE QUERY` and `DROP QUERY` are Tier 3 and require
+   the `admin` verb for the target namespace. A definition is executed by
+   principals who may not be permitted to write it; that gap is the point.
+6. **Verification is not one-shot.** An implementation MUST re-verify the
+   read-only property when the body executes, not only when it is defined. A
+   definition can arrive by replication from a peer running a different
+   revision, so a definition-time check alone is a check the attacker chooses
+   the timing of.
+
+**Limits.** An implementation MUST enforce, and `DESCRIBE capabilities` SHOULD
+report:
+
+| Constraint | Limit |
+|---|---|
+| Max saved queries per namespace | 100 |
+| Max query body size | 8192 bytes |
+| Max declared parameters | 10 |
+| Query name | string literal, 64 characters |
+
+Exceeding them is `CAL-E131` / `CAL-E132` / `CAL-E133`.
+
+A parameter MAY declare a default (`$n = 10`). A parameter without a default is
+required at the call site.
+
+#### 8.18.3 RUN
+
+```sql
+RUN "session_prompt"($user = "john", $session = "call-42")
+```
+
+`RUN "<name>"` binds arguments to the declared parameters and executes the
+body. A parameter with neither an argument nor a default is `CAL-E134`; an
+unknown name is `CAL-E130`.
+
+**`RUN` classifies as its body does.** Because bodies are structurally Tier 0
+(§8.18.2 rule 1, re-verified at execution by rule 6), running a saved query is
+a **read**, requires only the `read` verb, and is available wherever `RECALL`
+is. An implementation MUST NOT gate `RUN` behind the `admin` verb that
+`DEFINE QUERY` requires: defining is control, running is reading, and
+collapsing the two would make every consumer of a saved query an
+administrator.
+
+Substitution happens **before** parsing, so an implementation caching parsed
+statements by text reuses a plan per distinct argument set, and a
+zero-parameter saved query hits that cache on every call after the first.
+Values bind as values, not as text splices: a bound argument can never
+introduce a token, so no argument can change the body's classification.
+
+#### 8.18.4 DROP QUERY and DESCRIBE QUERIES
+
+```sql
+DROP QUERY "session_prompt"
+DESCRIBE QUERIES
+```
+
+`DROP QUERY` removes a definition. It is Tier 3 (`admin`), it touches no grain,
+and it is lossless against memory (§2.4). Dropping an absent name is
+`CAL-E130`.
+
+`DESCRIBE QUERIES` is Tier 0 and lists the registered definitions -- name,
+description, parameter count, body size, both revision stamps (`updated_at` and
+`definition_hash`, §8.18.1), and the last-execution stamp where the host keeps
+one. It is the discovery surface an agent uses to
+find what it may `RUN`.
+
+`DESCRIBE capabilities` SHOULD report saved-query support and the limits of
+§8.18.2.
+
+
+### 8.19 REPORT SUBJECT (Tier 0 -- new in 1.3)
+
+The read-only mirror of `FORGET SUBJECT`: the same selection, disclosed instead
+of destroyed. It is the in-language answer to GDPR Art. 15 (access) and Art. 20
+(portability), and the safe rehearsal for an erasure.
+
+```sql
+REPORT SUBJECT "pat"
+REPORT SUBJECT "pat" WITH text_mentions
+```
+
+**One selector, two verbs.** `REPORT SUBJECT <id>` MUST select exactly the set
+`FORGET SUBJECT <id>` would erase, through the same code path and the same
+indexes (OMS §28.4.4 rule 3) -- the identity, its partition-style derived keys,
+grains carrying it in either triple position, its thread and run records, and
+under `WITH text_mentions` its indexed text mentions. `WITH text_mentions`
+carries the same hard precondition on both statements: where the text index is
+absent or incomplete the statement MUST refuse rather than return a quietly
+partial answer.
+
+Sharing the selector is the point. It makes "show me everything you hold, then
+delete it" two statements over one set, and it means a disclosure cannot
+promise less than an erasure removes or more than it reaches.
+
+**It is a read, and it is classified as one.** `REPORT SUBJECT` requires the
+`read` verb, not `erase`. It MUST NOT sit behind whatever process-level cap
+disables destructive operations: a deployment that has turned destruction off
+still owes data subjects access, and coupling the two would make an
+implementation choose between refusing erasure and refusing disclosure.
+
+**It writes nothing.** No audit Observation, no grain of any kind. Tier 2 writes
+an audit record because destruction is irreversible and its record must outlive
+it (§8.14.4); an access request destroys nothing and needs no such record. A
+host that logs access does so in host logs, not in memory -- and an audit grain
+naming the subject of a DSAR would itself become personal data about that
+subject, in an immutable replicating store.
+
+**Result.** The response carries every matched identity string (so the requester
+can see *which* keys matched, including derived ones) and the selected grains.
+Hosts SHOULD also offer the result as a portable export, since Art. 20 asks for
+a machine-readable form rather than a rendering.
+
 
 ---
 
@@ -1371,7 +1966,8 @@ Each grain type defines a **content rule** (what becomes the text content of the
 | **Observation** | `object` (what was observed) | `observer`? |
 | **Reasoning** | `conclusion` | `type`? |
 | **State** | `plan` (summary) | `context`? |
-| **Workflow** | `nodes` (joined as readable text) | `trigger`? |
+| **Workflow** | `nodes` (joined as readable text) | `name`? |
+| **Trigger** | what the rule watches | `kind`, `scope`? |
 | **Consensus** | `object` (the agreed claim) | `threshold`?, `count`? |
 | **Consent** | `purpose` | `action`, `grantor`, `grantee` |
 | **Skill** | `description` (what the skill enables) | `name`, `proficiency`?, `domain`? |
@@ -1587,7 +2183,7 @@ A template that needs more than one section — a `HEADER`, a `FOOTER`, an
 explicit `ELEMENT_SUMMARY`, a `SOURCE_BREAK` — MUST use the section list. A
 definition MUST NOT combine the two forms.
 
-**All 12 grain types rendered:**
+**All 13 grain types rendered:**
 ```sml
 <context intent="helping alice prepare her Q1 engineering review">
 
@@ -1613,7 +2209,7 @@ definition MUST NOT combine the two forms.
 
   <state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>
 
-  <workflow trigger="review_prep_requested">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>
+  <workflow name="review prep">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>
 
   <consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>
 
@@ -1625,6 +2221,61 @@ definition MUST NOT combine the two forms.
 
 </context>
 ```
+
+### 10.6.3 Template identity, revision, and DROP TEMPLATE (new in 1.3)
+
+A registered template is a **stored definition** and lives in the memory's
+metadata table under `tpl:<name>` (OMS §28.4.1), on exactly the terms §8.18.1
+sets out for saved queries: carried by the memory rather than the client, not a
+grain, replicating latest-wins, with usage stamps that do not replicate.
+
+**Identity.** A template's identity is `<namespace>/<name>` — the form OMS
+§8.12 already uses as a Recommendation `target_ref`. Versions 1.0–1.2 gave a
+template a bare 64-character name and nothing else, which left that target
+unpinnable: a Recommendation applied against `template:acct/invoice_row` could
+not say which revision it changed, and so could not store an honest inverse.
+
+Every stored template therefore carries the two stamps OMS §28.4.1 requires of
+any definition — `updated_at` (the replication tiebreaker) and
+`definition_hash` (the SHA-256 identity of this revision's body). A host MUST
+report both from `DESCRIBE TEMPLATES`, so a reviewer can see which revision a
+proposal targets and an auditor can tell whether the template that rendered a
+`summary` is still the template that would render it now.
+
+The revision covers the template's **own** body, not its parent's. A template
+that `EXTENDS` a preset resolves against whatever that preset is at render
+time; presets are implementation-shipped and versioned with the
+implementation, so they are not stored definitions and have no
+`definition_hash`.
+
+**Built-ins are not stored definitions.** The presets and built-in templates an
+implementation ships are code, not metadata. They MUST NOT be droppable, MUST
+NOT be overwritten by `DEFINE TEMPLATE`, and MUST NOT be persisted into the
+metadata table — a memory that carried a copy of a built-in would pin one
+implementation's rendering of it forever.
+
+**DROP TEMPLATE.**
+
+```sql
+DROP TEMPLATE "invoice_row"
+DESCRIBE TEMPLATES
+```
+
+`DROP TEMPLATE` removes a stored template definition. It is Tier 3 (`admin`),
+it touches no grain, and it is lossless against memory (§2.4): the grains the
+template ever rendered are untouched, and re-running the `DEFINE` restores it
+byte-for-byte. Dropping a name that does not exist, or a built-in, is an error;
+dropping a template another template `EXTENDS` MUST be refused rather than
+leaving a dangling parent.
+
+Nothing here is retroactive. Output already rendered through a dropped or
+replaced template is text that was already produced; a template is a rendering
+instruction (§10.8), so changing one changes what renders *next*.
+
+`UNDEFINE` remains reserved and unspecified (§2.4, Appendix D). It was the
+placeholder for these semantics, `DROP TEMPLATE` is the spelling that shipped,
+and an implementation MUST NOT accept `UNDEFINE` as an alias for it.
+
 
 ### 10.7 Template Inheritance
 
@@ -1655,6 +2306,7 @@ Templates are rendering instructions, not programs:
 | Template name length | 64 characters |
 | Inheritance depth | 1 |
 | Variable set | Closed |
+| Revision stamps | `updated_at` + `definition_hash` (§10.6.3, OMS §28.4.1) |
 
 ### 10.9 TOON — Token-Oriented Object Notation
 
@@ -1720,11 +2372,12 @@ Where:
 | `observations` | `observer`, `content` |
 | `reasonings` | `type`, `content` |
 | `states` | `context`, `content` |
-| `workflows` | `trigger`, `content` |
+| `workflows` | `name`, `content` |
 | `consensuses` | `threshold`, `count`, `content` |
 | `consents` | `grantor`, `grantee`, `action`, `content` |
 | `skills` | `name`, `content`, `proficiency` |
 | `recommendations` | `target`, `content`, `severity` |
+| `triggers` | `kind`, `content` |
 
 At `summary` disclosure, `confidence`, `state`, `phase`, and `type` columns are omitted.
 At `full` disclosure, additional columns `source` and `observed` are appended.
@@ -1963,7 +2616,13 @@ If a source fails, its allocated budget is redistributed and a revised `budget_a
 
 ## 12. Domain Profile Querying
 
-OMS defines domain profiles (healthcare, legal, finance, robotics, science, consumer, integration). CAL provides structured access to domain-tagged grains.
+OMS defines domain profiles (healthcare, legal, finance, robotics, science, consumer, integration, mail). CAL provides structured access to domain-tagged grains.
+
+`domain_prefix` is a **closed** production (§4), so a new OMS profile is not
+usable from CAL until this specification admits its prefix. `mail:` is admitted
+in 1.3 alongside OMS Appendix A.8; the closure is deliberate -- an open prefix
+would make every misspelled field name a valid domain field rather than
+`CAL-E004`.
 
 ### 12.1 Profile Querying via Tags
 
@@ -1986,6 +2645,7 @@ Domain-specific fields use OMS domain prefix convention:
 | Science | `sci:` | `sci:experiment_id`, `sci:dataset_id`, `sci:methodology`, `sci:reproducibility_status` |
 | Consumer | `con:` | `con:session_context`, `con:interaction_channel` |
 | Integration | `int:` | `int:source_system`, `int:correlation_id`, `int:sync_status` |
+| Mail | `mail:` | `mail:message_id`, `mail:from`, `mail:to`, `mail:subject`, `mail:folder` |
 
 **Example:**
 ```sql
@@ -2016,6 +2676,10 @@ Every CAL statement maps to one or more OMS Store Protocol operations (OMS §28.
 | REVERT | 3 | 4 | `get` + `get` + `supersede` |
 | Set operation | 2 | 2 | One query per operand |
 | ASSEMBLE | N | N | N x `query`/`search` (one per source) |
+| DEFINE QUERY / DROP QUERY | 1 | 1 | `meta_put` / `meta_delete` (OMS §28.4.1) -- no grain operation |
+| DEFINE TEMPLATE / DROP TEMPLATE | 1 | 1 | `meta_put` / `meta_delete` (OMS §28.4.1) -- no grain operation |
+| RUN "<name>" | 1 | N | `meta_get` + the body's own operations |
+| DESCRIBE QUERIES / TEMPLATES | 1 | 1 | `meta_scan` (OMS §28.4.1) |
 
 ---
 
@@ -2123,13 +2787,49 @@ When the query specifies a format list (`FORMAT [markdown, json]`), the response
 
 ### 14.3 Progressive Disclosure
 
+Progressive disclosure has **two orthogonal axes**, and prior revisions
+described only the first while the grammar (§4) admitted only the second --
+`disclosure_level` has been `summary | headlines | full` since 1.0, against a
+table naming `summary | standard | full`. Both axes are real; they are separate
+controls.
+
+**Axis 1 -- metadata density.** How many attributes each element carries. This
+is the axis the table below describes, and the default an implementation
+applies when no option is given:
+
 | Level | Metadata Density | When Used |
 |-------|-----------------|-----------|
 | `summary` | Tag name + subject + content only | Token budget tight (<1000 tokens) |
 | `standard` | + confidence, role, state, time | Default |
 | `full` | + source_type, importance, tags, verification_status | Token budget generous or LIMIT <= 5 |
 
-Progressive disclosure controls **metadata density on a flat structure**, not nesting depth. The element shape stays the same across all levels -- only the number of attributes changes.
+**Axis 2 -- body extent.** How much of each grain's free-text *body* survives
+the render. This is what `WITH progressive_disclosure(<level>)` selects, and its
+levels are the grammar's:
+
+| Level | Body extent |
+|-------|-------------|
+| `summary` | Free-text bodies clipped to a short lead (a reference implementation uses 40 characters) |
+| `headlines` | Clipped to a longer lead (a reference implementation uses 80 characters) |
+| `full` | Bodies whole, **and** the long-form definition text no other level carries -- a Skill's `instructions` and `when_to_use` |
+
+`full` is additive rather than merely unclipped: the long-form fields are
+omitted at every other level regardless of budget, because they are the fields
+that dominate a Skill grain's token cost.
+
+The bare option (`WITH progressive_disclosure`, no level) means `full`.
+**Omitting the option entirely is not a level** -- it leaves each format's
+established output unchanged, which is what keeps the option additive for
+callers who never passed it.
+
+The two axes compose: an element may carry full metadata over a clipped body,
+or minimal metadata over a whole one. Neither axis controls nesting depth --
+the element shape is flat and stays the same at every level, on both axes.
+
+This is the same ladder as OMS §10.5's tier model and the `ELEMENT_SUMMARY` /
+`ELEMENT_OMIT` template sections (§10.6): one mechanism -- degrade the body
+before dropping the grain -- surfaced as a query option, a template section, and
+a budget-pressure fallback.
 
 ### 14.4 Per-Grain-Type Content Projection
 
@@ -2144,7 +2844,8 @@ Each grain type projects its fields into a **text content** string and **attribu
 | Observation | `object` | `<observation observer="system">alice opened incident-dashboard at 09:14 UTC</observation>` |
 | Reasoning | `conclusion` | `<reasoning type="deductive">alice is prioritising reliability given 3 P0 incidents; lead with incident reduction narrative</reasoning>` |
 | State | `plan` summary | `<state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>` |
-| Workflow | `nodes` joined | `<workflow trigger="review_prep_requested">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>` |
+| Workflow | `nodes` joined | `<workflow name="review prep">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>` |
+| Trigger | what it watches | `<trigger kind="polling" scope="mailbox:accounts@example.com">poll the accounting mailbox every 2 minutes for invoices</trigger>` |
 | Consensus | `object` | `<consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>` |
 | Consent | `purpose` | `<consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>` |
 | Skill | `description` | `<skill name="incident_retro" proficiency="0.82" domain="engineering">run a blameless incident retrospective and distil the recurring themes</skill>` |
@@ -2391,6 +3092,35 @@ CAL String (ADD, SUPERSEDE, or REVERT)
 
 The namespace is ALWAYS taken from the token, never from the query. Implementations MUST overwrite any namespace specified in the CAL string with the token's namespace.
 
+### 18.4 Principal-Bound Sessions (Tier 2/3 -- new in 1.3)
+
+Tier-2 and Tier-3 execution requires a **principal-bound session**: the host
+authenticates a caller, resolves it to a principal name, and every statement
+in the session executes *as* that principal.
+
+- **The credential/policy split.** The host's credential store maps secrets
+  (tokens, passwords, OS identity) to principal *names*; the memory's grant
+  grains (OMS §12.6) map principal names to *rights*. Credentials MUST NOT
+  be carried in grains, in CAL statements, or in the memory file in any
+  form. A CAL statement can name a principal (`GRANT ... TO "agent:x"`); it
+  can never mint, present, or reveal a credential.
+- **The boundary rule.** Anything that needs a filesystem path, a
+  credential, or a process to exist is a host operation; everything that
+  acts on grains in an open memory is CAL. Hosts MUST NOT extend CAL past
+  this boundary.
+- **Observer class.** Each principal's host record carries its observer
+  class (`human` or an agent class per OMS §24); audit grains take
+  `observer_type` from that record, never from statement text.
+- **Owner sessions.** A host MAY designate a local session as *owner* (OMS
+  §12.6.4) -- the implicit superuser of the memory it opens, exempt from
+  grant lookup. This preserves the single-operator experience: a memory
+  with no grant grains is fully usable by its owner and confers nothing on
+  anyone else.
+- **Fail-closed.** An unauthenticated or unknown caller where a credential
+  map is configured resolves to an anonymous principal with at most `read`;
+  where no authorization model exists at all, Tier 2/3 statements MUST be
+  refused (`CAL-E122`).
+
 ---
 
 ## 19. Policy Integration
@@ -2409,10 +3139,10 @@ CAL queries execute through the same read path as all other interfaces. No CAL s
 
 ### 19.2 GDPR Implications
 
-- **Art. 15 (Right of Access):** CAL enables DSAR via `RECALL WHERE user_id = "alice" COUNT`
+- **Art. 15 (Right of Access):** `REPORT SUBJECT "<id>"` (Tier 0, `read` verb, §8.19) -- the erasure selector in disclose-mode, so the answer matches what an erasure would remove.
 - **Art. 16 (Right to Rectification):** CAL SUPERSEDE enables correction of inaccurate personal data.
-- **Art. 17 (Right to Erasure):** Excluded at grammar level. Erasure only via implementation-specific APIs.
-- **Art. 20 (Data Portability):** CAL can serve as query interface for exports.
+- **Art. 17 (Right to Erasure):** Expressible in-language since 1.3 -- `FORGET SUBJECT <id> BECAUSE "..."` (Tier 2, `erase` verb, audited, one-way; §8.14). Hosts without Tier 2 continue to serve erasure via implementation-specific APIs.
+- **Art. 20 (Data Portability):** `REPORT SUBJECT` (§8.19), whose result hosts SHOULD offer as a portable export.
 - **Art. 25 (By Design):** Grammar-level safety qualifies as "by design" protection.
 
 ### 19.3 HIPAA Implications
@@ -2496,6 +3226,24 @@ Every CAL execution MUST produce an audit entry.
 | `tier` | integer | 1 |
 | `duration_ms` | integer | Execution time |
 
+**Tier 2 (Destroy) and Tier 3 (Control) -- new in 1.3:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `query_hash` | string | SHA-256 of normalized CAL string |
+| `namespace` | string | Effective namespace |
+| `principal` | string | The session principal (§18.4) -- not pseudonymized; accountability requires the real name |
+| `operation` | string | `"forget"`, `"forget_subject"`, `"purge"`, `"grant"`, `"revoke"`, `"approve"`, `"reject"`, `"apply"`, `"rollback"`, `"run_loop"` |
+| `target` | string | Hash, subject identity, age window, or `principal/verbs/ns` for DCL |
+| `reason` | string? | The `BECAUSE` text (absent only on bare `FORGET <hash>`) |
+| `audit_grain` | string | Content address of the in-memory audit Observation (§8.14.4, OMS §8.12.1) |
+| `tier` | integer | 2 or 3 |
+| `duration_ms` | integer | Execution time |
+
+Unlike Tier 0/1 audit entries -- host-side logs -- Tier 2/3 executions
+additionally write their audit **into the memory itself** as an Observation
+grain (§8.14.4, §8.16.1), so accountability replicates with the file.
+
 **Streaming audit fields (additional):**
 
 | Field | Type | Description |
@@ -2544,6 +3292,8 @@ See [Appendix C](#appendix-c-error-code-registry) for the complete registry. Err
 | CAL-E085 -- CAL-E096 | Template | 12 |
 | CAL-E100 | Version | 1 |
 | CAL-E110, CAL-E113 | Multi-Format | 2 |
+| CAL-E121 -- CAL-E127 | Authorization (Tier 2/3, new in 1.3) | 7 |
+| CAL-E130 -- CAL-E137 | Saved query (new in 1.3) | 8 |
 
 ### 22.3 Warning Codes
 
@@ -2610,7 +3360,7 @@ Everything in Core, plus:
 - `LET` bindings
 - All semantic shortcuts (SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN)
 - `ASSEMBLE` statement with BUDGET, PRIORITY, FORMAT
-- Advanced `WITH` options (diversity, score_breakdown, explanation, provenance, progressive_disclosure)
+- Advanced `WITH` options (diversity, score_breakdown, explanation, provenance, progressive_disclosure, anonymize)
 - `AS` per-query format control
 - `application/json+cal` wire format (dual wire format)
 - Error suggestion system ("did you mean?")
@@ -2643,10 +3393,37 @@ Everything in Evolve, plus:
 - `DESCRIBE templates`
 - WebSocket transport for streaming
 
-Implementations MUST declare conformance:
+### Tier modules (MAY implement -- new in 1.3)
+
+Orthogonal to Levels 1--4, the Tier 2/3 statement families are optional
+**modules**. Implementing one means implementing it whole:
+
+- **Destroy (Tier 2):** `FORGET <hash>`, `FORGET SUBJECT`, `PURGE OLDER
+  THAN`; an authorization model (host-defined suffices); the audit
+  Observation (§8.14.4); error codes CAL-E121--E126. Tier 2 without Tier 3
+  is legal.
+- **Control (Tier 3):** `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL`
+  over in-memory grant grains (OMS §12.6); principal-bound sessions
+  (§18.4); the governance statements (§8.16) where the host has a
+  recommendation engine. Implies the grant model Tier 2 consumes.
+- **Definitions (Tier 3 to write, Tier 0 to read):** `DEFINE QUERY`/`DROP
+  QUERY`/`RUN`/`DESCRIBE QUERIES` (§8.18) and `DEFINE TEMPLATE`/`DROP
+  TEMPLATE`/`DESCRIBE TEMPLATES` (§10.6) over the memory's metadata table
+  (OMS §28.4.1), including the replication rules of §8.18.1, the
+  define-time body validation of §8.18.2, and error codes CAL-E130--E137.
+  An implementation MAY support templates without saved queries; both are
+  read surfaces at Tier 0 once defined.
+
+A Tier-0/1 implementation is not diminished by declining both modules --
+**tiers gate operations, not portability** (§2.2), and conformance claims
+are per-tier.
+
+Implementations MUST declare conformance, including their tiers:
 ```json
-{"cal_conformance": "extended", "cal_version": "1.0"}
+{"cal_conformance": "extended", "cal_version": "1.3", "cal_tiers": [0, 1]}
 ```
+
+`DESCRIBE capabilities` MUST report the same tier list.
 
 ---
 
@@ -2776,9 +3553,16 @@ It can read, assemble, and evolve memories, but never delete them.
 
 ### Rules:
 - LIMIT is always enforced (default 20, max 1000)
-- CAL cannot delete, erase, forget, or destroy data.
-- REASON is mandatory for all evolve operations.
+- CAL cannot rewrite history. Assume you cannot delete, erase, forget, or
+  destroy data: destruction and GRANT/APPROVE-class statements execute only
+  for sessions explicitly granted them -- check DESCRIBE capabilities before
+  attempting any, and expect CAL-E121/E122 refusals otherwise.
+- REASON is mandatory for all evolve operations; BECAUSE is mandatory for
+  governance and bulk-erasure statements.
 - Use HISTORY to check current version before SUPERSEDE.
+- WITH anonymize("standard"|"strict") can only STRENGTHEN a file-declared
+  pseudonymization policy, never weaken one; REHYDRATE (reverse lookup)
+  is grant-gated and audited like destruction.
 ```
 
 ---
@@ -2871,6 +3655,49 @@ All error codes use the `CAL-E` prefix.
 | CAL-E110 | Too many formats in multi-format list (maximum 5) |
 | CAL-E113 | Duplicate format key in multi-format list (alias or canonical name collision) |
 
+### Authorization Errors (CAL-E121 -- CAL-E126, new in 1.3)
+
+> The block begins at E121, not E120: the deployed dialect's registry had
+> already assigned CAL-E120 (JSON+CAL parse failure) before this draft, and
+> codes are append-only in every registry. E121 matches its shipped
+> `NotAuthorized` exactly.
+
+| Code | Description |
+|------|-------------|
+| CAL-E121 | NotAuthorized — the session principal lacks the statement's verb on the target namespace. The message SHOULD name the missing verb, the resource, and the `GRANT` statement that would confer it |
+| CAL-E122 | TierNotSupported — the host does not implement this statement's tier (or has no authorization model for Tier 2/3) |
+| CAL-E123 | UnknownPrincipal — the named or session principal does not resolve |
+| CAL-E124 | SelfApproval — the reviewing principal created, or triggered the run that authored, this recommendation |
+| CAL-E125 | ContextRefused — Tier 2/3 statement inside `BATCH`, a saved-query body, or `proposal_cal` where forbidden (§8.14.3) |
+| CAL-E126 | ReasonRequired — a required `BECAUSE` reason is missing or empty at execution |
+| CAL-E127 | MappingUnknown — `REHYDRATE` named a mapping id that resolves to neither a live session mapping nor a vault entry |
+
+### Saved Query Errors (CAL-E130 -- CAL-E137, new in 1.3)
+
+> **Why this block is not CAL-E053--E059.** Those codes sit in the free gap
+> between the Evolve block (ends E052) and the grain-type block (starts E060),
+> and are the natural home for a new family. They are not used here because the
+> reference implementation had already assigned CAL-E040--E059 to its template
+> and saved-query errors before this section existed, overlapping the Evolve
+> codes this registry published in 1.5 -- only CAL-E044 (`Tier1NotEnabled`)
+> agrees between the two. Codes are append-only in every registry, so neither
+> side can renumber, and putting the saved-query family at E053--E059 would
+> place it directly against the half of that implementation's block that is
+> *already* colliding. A fresh block collides with nothing, and the divergence
+> below is a defect to reconcile in the implementation rather than a
+> disagreement to encode in the registry.
+
+| Code | Description |
+|------|-------------|
+| CAL-E130 | QueryNotFound — `RUN` or `DROP QUERY` named a definition that does not exist |
+| CAL-E131 | TooManyQueries — the namespace already holds the maximum number of saved queries (§8.18.2) |
+| CAL-E132 | QueryBodyTooLarge — body exceeds the maximum body size (§8.18.2) |
+| CAL-E133 | TooManyQueryParams — more declared parameters than the maximum (§8.18.2) |
+| CAL-E134 | MissingQueryParam — a parameter with no default received no argument at the `RUN` call site |
+| CAL-E135 | RecursiveQuery — `RUN` appears inside a `DEFINE QUERY` body (§8.18.2 rule 2) |
+| CAL-E136 | QueryBodyNotReadOnly — a body contains a statement above Tier 0 (§8.18.2 rule 1) |
+| CAL-E137 | InvalidQueryBody — the body failed to parse at definition time with its parameters standing in (§8.18.2 rule 3) |
+
 ### Shortcut and Grain Type Errors (CAL-E060 -- CAL-E066)
 
 | Code | Description |
@@ -2959,8 +3786,11 @@ EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE,
 ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, AS,
 FOR, FROM, BUDGET, PRIORITY, FORMAT,
 LET, THREAD, DIFF,
-ADD, SUPERSEDE, REVERT, SET, REASON,
-STREAM, TEMPLATE, DEFINE, UNDEFINE, EXTENDS,
+ADD, SUPERSEDE, REVERT, SET, REASON, BECAUSE, REHYDRATE, REPORT,
+FORGET, PURGE, SUBJECT, OLDER, THAN, TYPE,
+GRANT, REVOKE, ON, TO, SHOW, GRANTS, PRINCIPAL,
+APPROVE, REJECT, APPLY, ROLLBACK, RUN, LOOP, FULL,
+STREAM, TEMPLATE, DEFINE, UNDEFINE, EXTENDS, DROP, QUERY, QUERIES, DESCRIPTION,
 HEADER, ELEMENT, ELEMENT_SUMMARY, ELEMENT_OMIT, SOURCE_BREAK, FOOTER,
 PREFERENCE, KNOWLEDGE, PERMISSION, INTERACTION, AGENCY, LIFECYCLE, OBSERVATION,
 CAL, OF
@@ -2976,7 +3806,8 @@ DIVERSITY, MMR, THRESHOLD, RERANK, PROVENANCE,
 SUPERSEDED, EXPLANATION, SCORE_BREAKDOWN,
 CONSISTENCY, EVENTUAL, BOUNDED, LINEARIZABLE,
 CACHE, PIN, UNPIN, MERGE, LANG,
-CHUNK, PAUSE, RESUME, CANCEL
+CHUNK, PAUSE, RESUME, CANCEL,
+ROLE                                        -- DEFINE ROLE, deferred (§3.2)
 ```
 
 ---
@@ -3017,7 +3848,7 @@ CHUNK, PAUSE, RESUME, CANCEL
 | Event | `content` | String | `=` |
 | State | `context` | String | `=`, `!=` |
 | State | `plan` | String | `=` |
-| Workflow | `trigger` | String | `=`, `!=` |
+| Workflow | `node` | String | `=` |
 | Workflow | `node` | String | `=` |
 | Workflow | `binding` | String | `=` |
 | Tool | `tool_name` | String | `=`, `!=`, `IN` |
@@ -3076,14 +3907,15 @@ CHUNK, PAUSE, RESUME, CANCEL
 
 | Version | Date | Change |
 |---------|------|--------|
+| 1.3-draft | 2026-08-10 | **The pillar changes, on purpose and in the open.** 1.0--1.2 promised "non-destructive by grammar; no unsafe mode." The promise was true and had a hidden cost: real deployments still needed erasure -- GDPR, retention -- so destruction happened anyway, outside the language, ungoverned by any spec. Exiling destruction never prevented it; it only prevented *specifying* it. 1.3 brings it inside, where grammar bounds its shape (whole grains by hash, identity, or age -- never a predicate, never a key, no history rewrite, no `UNFORGET`), grants gate it per principal, and the audit trail sees it (a mandatory in-memory audit Observation per Tier-2 execution). Adds the four-tier model (Core/Evolve/Destroy/Control; tiers gate operations, not portability -- §2.2), Tier 2 statements `FORGET <hash>`/`FORGET SUBJECT`/`PURGE OLDER THAN` (§8.14), Tier 3 DCL `GRANT`/`REVOKE`/`SHOW GRANTS`/`DESCRIBE PRINCIPAL` over in-memory grant grains (§8.15, OMS §12.6), Tier 3 governance statements `APPROVE`/`REJECT`/`APPLY`/`ROLLBACK`/`RUN LOOP` + `DESCRIBE loop`-family (§8.16), principal-bound sessions and the credential/policy split (§18.4), authorization error codes CAL-E121--E126, and the `cal_tiers` conformance declaration. `DEFINE ROLE` reserved, deferred. The anonymization batch (2026-08-16) adds `WITH anonymize("<level>")` as a strengthen-only recall/per-source option (§8.1.2, §8.2.1), the Tier-3 `REHYDRATE` statement with its stated classification obligation (§8.17, CAL-E127), pairing OMS §10.5's pseudonymized-egress model. The trigger batch (2026-08-19) adds `RECALL triggers` and removes the `ON "..."` workflow clause with OMS's `Workflow.trigger`. The saved-query batch (2026-08-19) adds §8.18 saved queries -- `DEFINE QUERY`/`RUN`/`DROP QUERY`/`DESCRIBE QUERIES`, Tier-0-only bodies validated at definition time, definitions as host metadata (OMS §28.4.1) rather than grains, error codes CAL-E130--E137 -- and admits `DROP` to the grammar with a closed two-target set that reaches no grain (§2.4). Every 1.0--1.2 document remains valid Tier-0/1 CAL; a session without grants is exactly the language those releases promised -- the floor, not the ceiling. |
 | 1.2 | 2026-08-03 | As part of the OMS v1.5 release, adds the **Recommendation** grain type (`0x0C`) to the closed query set: `RECALL recommendations` with a type-specific field set (`target_ref`, `analyzer`, `severity`, `dedup_key`, `rec_status`), `<recommendation>` content projection, TOON columns, `recommendation_field` grammar production, and the type in `grain_type_plural`/`grain_type_singular`, `DESCRIBE`, and the JSON `valid_values` enum. Recommendation is **query-only** — it is engine-emitted and lifecycle-gated, so it is deliberately absent from the CAL-addable set (`ADD`/`SUPERSEDE SET` never create or transition a recommendation). Also adds the **`ELEMENT` shorthand** for custom templates (Section 10.6.1): `DEFINE TEMPLATE <name> AS "<text>"` and `FORMAT TEMPLATE "<text>"`, both defined by equivalence to an `ELEMENT` section, plus the `template_shorthand` production and `"TEMPLATE" , string_literal` in `format_spec`. This also corrects two 1.1 defects in the same examples (Sections 10.1.1, 14.2.1, 27): the `TEMPLATE "..."` form they use was not admitted by the Section 4 grammar, and they interpolated bare `{{subject}}`/`{{object}}` rather than the `grain.` namespace that Section 10.5 defines and Section 10.8 closes. Backward-compatible. |
 | 1.1 | 2026-03-05 | Multi-format output: FORMAT and AS clauses accept bracketed format lists (`FORMAT [markdown, json]`). Single query execution produces multiple renderings. New Section 10.1.1 (syntax and rules), Section 14.2.1 (multi-format response shape), error code CAL-E110. Backward-compatible — single-format syntax unchanged. As part of the OMS v1.4 release, also adds the Skill grain type (`0x0B`) to the closed query set (`RECALL skills` / `ADD skill`, type-specific field set, `<skill>` projection, TOON columns, `mg:capable_of` in the `AGENCY` shortcut) and corrects `belief`/`action` literals the rename left behind (`grain_type_plural`, `RECALL MY`, TOON tables, `DESCRIBE` listing, `CAL-E051`). |
 | 1.0 | 2026-03-03 | Initial CAL specification. 12-variant statement model. Tier 0 (RECALL, ASSEMBLE, SetOp, EXISTS, HISTORY, EXPLAIN, DESCRIBE, BATCH, COALESCE) + Tier 1 (ADD, SUPERSEDE, REVERT). ASSEMBLE with budget, priority, format, streaming. Semantic shortcuts (ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, BETWEEN). LET bindings. Custom FORMAT templates (Mustache-subset). Grain-type-specific queryable fields for all 10 OMS types. mg: relation vocabulary with category shortcuts. Domain profile querying. Dual wire format (text/cal + application/json+cal). Internationalization (Unicode NFC, cross-lingual search, bidi safety). Streaming protocol (SSE, NDJSON, WebSocket). THREAD shorthand. HISTORY AS OF and DIFF. Non-destructive safety model. Content Projection Model with flat semantic output (Section 10.3-10.4). PROJECT clause for custom field surfacing. Per-grain-type content projection rules with humanize() and time humanization. ELEMENT/ELEMENT_SUMMARY/SOURCE_BREAK template sections for flat semantic rendering. TOON (Token-Oriented Object Notation) format support — `toon` as a first-class FORMAT/AS preset (Section 10.9): tabular CSV rendering for uniform RECALL results, grouped-section rendering for ASSEMBLE results, per-grain-type column sets at each disclosure level, PROJECT integration, STREAM compatibility, auto-TOON budget-pressure hint (CAL-W005). |
 
 ---
 
-**Document Status:** This is the CAL (Context Assembly Language) Specification v1.2. It defines a non-destructive, deterministic, LLM-native context assembly and evolution language for OMS-compliant memory databases. CAL is part of the Open Memory Specification (OMS) v1.5 — see [SPECIFICATION.md](./SPECIFICATION.md).
+**Document Status:** This is the CAL (Context Assembly Language) Specification v1.3, **draft for comment**. It defines a deterministic, LLM-native context assembly, evolution, destruction, and control language for OMS-compliant memory databases — append-only by construction for evolution, authorization-gated for destruction and control. CAL is part of the Open Memory Specification (OMS) v1.6 draft — see [SPECIFICATION.md](./SPECIFICATION.md).
 
-**Last Updated:** 2026-08-03
+**Last Updated:** 2026-08-19
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
 **Copyright:** Public Domain (CC0 1.0 Universal)
