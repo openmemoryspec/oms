@@ -3651,6 +3651,14 @@ Conversations are reconstructed from Event grain sequences using `session_id` an
 1. Query: `type=event, session_id=X, system_valid_to=null, sort=timestamp_ms ASC`
 2. Or: start from the most recent Event grain (`messages_tail` in a State grain) and follow `parent_message_id` backward.
 
+**Mail and other addressed transports.** A mail thread is a conversation under
+this convention, not a separate structure: the thread is the `session_id`, and
+the reply edge is `parent_message_id`. The transport's own identifiers
+(`Message-ID`, `In-Reply-To`, `References`) and its addressing (`From`, `To`,
+`Cc`, `Subject`) have no home among the Event fields, which model LLM turns —
+they belong to the `mail:` domain profile (Appendix A.8), which maps them onto
+this convention rather than beside it.
+
 ### 28.7 Session Handoff Convention
 
 When Agent A transfers control of a conversation to Agent B, the handoff is recorded using a Goal grain with `mg:delegates_to` relation and delegation scope fields (§6.11):
@@ -3911,6 +3919,73 @@ Applies to grains produced in consumer-facing agent contexts — personal assist
 | `con:ccpa_opted_out` | boolean | no | User has exercised CCPA opt-out of sale; MUST NOT be used as a processing basis — use `processing_basis` field instead |
 
 **Normative:** Grains with `"profile:consumer"` that include `user_id` or any direct identifier MUST set `processing_basis` to a lawful basis under GDPR Art. 6 / CCPA § 1798.100 before cross-system transfer. Grains with `con:ccpa_opted_out: true` MUST NOT be included in data sale or data broker transfers.
+
+### A.8 Mail Profile (`mail:`) (new in 1.6)
+
+**Tag:** `"profile:mail"` | **Namespace prefix:** `mail:`
+
+Applies to grains recording messages carried by an addressed, threaded
+transport — email (RFC 5322), and by extension any transport with the same
+shape. Mail profile fields are stored in the grain's `context` map (compact
+key: `ctx`), following the same pattern as other domain profiles.
+
+**Why a profile and not new common fields.** Event grains model LLM turns:
+`role` is a chat enum, and threading is `session_id` + `parent_message_id`
+(§28.6). Nothing anywhere in this specification names a sender, a recipient, a
+subject line, or an RFC 5322 `Message-ID`. Every mail-shaped agent therefore
+invents its own `context` keys, which defeats portability for exactly the
+grains most worth porting — an inbox is the archetypal thing an agent is asked
+to remember across tools. A profile fixes that at the vocabulary layer without
+touching the format: `context` already exists, domain profiles already
+replicate, and no compact key, content address, or grain type changes.
+
+The alternative considered and rejected was a first-class `thread_id` common
+field. It would have meant a new compact key on every grain type for a concept
+`session_id` already carries, in a format whose field map is normative and
+frozen (§6). Mapping onto the existing fields costs nothing and loses nothing.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `mail:message_id` | string | no | RFC 5322 `Message-ID`, angle brackets included, e.g. `"<CA+abc123@mail.example.com>"`. The transport's own identifier, distinct from the grain's content address |
+| `mail:in_reply_to` | string | no | RFC 5322 `In-Reply-To` — the `Message-ID` this message replies to |
+| `mail:references` | string[] | no | RFC 5322 `References` chain, oldest first |
+| `mail:from` | string | no | Envelope/header sender address |
+| `mail:to` | string[] | no | Primary recipient addresses |
+| `mail:cc` | string[] | no | Carbon-copy recipient addresses |
+| `mail:bcc` | string[] | no | Blind-copy addresses. Present only where the storing agent was the sender; MUST NOT be populated from a received message |
+| `mail:subject` | string | no | Header subject line |
+| `mail:date` | string | no | RFC 5322 `Date` header as an ISO 8601 string, distinct from `created_at` (when the grain was written) |
+| `mail:folder` | string | no | Mailbox or label the message was read from, e.g. `"INBOX"`, `"Receipts"` |
+| `mail:direction` | string | no | `"inbound"` \| `"outbound"` |
+| `mail:transport` | string | no | Transport family where not email, e.g. `"sms"`, `"whatsapp"`. Absent means email |
+
+**Mapping RFC 5322 onto Event fields (normative for the profile):**
+
+| RFC 5322 | OMS field | Note |
+|---|---|---|
+| Thread | `session_id` | The thread **is** the session. §28.6 already reconstructs a conversation from `session_id`; a mail thread is that conversation, so it MUST NOT get a parallel identifier |
+| `In-Reply-To` | `parent_message_id` **and** `mail:in_reply_to` | The two differ and both are needed: `parent_message_id` is the **content address** of the parent grain (resolvable in this memory), while `mail:in_reply_to` is the transport's `Message-ID` (resolvable at the transport, and the only form available when the parent has not been ingested) |
+| `Message-ID` | `mail:message_id` | Never the grain's content address. A resent or re-ingested message keeps its `Message-ID` while its grain address depends on the bytes stored |
+| `From` / `To` / `Cc` | `mail:from` / `mail:to` / `mail:cc` | Where an agent asserts facts *about* a correspondent, the identity also belongs in `subject`, so it is reachable by subject selection (§28.4.4) |
+| Body | `content` | With `role` set as for any Event |
+
+**Normative:**
+- A grain carrying `mail:` fields MUST declare `"profile:mail"` in
+  `structural_tags`.
+- `mail:message_id` MUST NOT be used as, or derived into, a content address.
+- Where a mail message is stored on behalf of an identifiable correspondent,
+  that correspondent SHOULD appear in `subject` — mail addresses are personal
+  data, and a correspondent reachable only through a `context` key is not
+  reachable by subject erasure or disclosure (§28.4.4, which reaches structured
+  references, not opaque body fields).
+- `mail:bcc` MUST NOT be populated from a received message: a recipient that
+  can see a blind-copy list has been handed a disclosure the sender did not
+  make.
+
+> **Status:** this profile is specified ahead of a reference implementation.
+> Unlike the rest of the 1.6 draft it was not written from working code, and
+> the field set should be read as a starting point for comment rather than as
+> settled vocabulary.
 
 ### A.7 Integration Profile (`int:`)
 

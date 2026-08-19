@@ -9,7 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query, template-identity, blob-lifecycle and subject-reachability batches 2026-08-19)
+## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query, template-identity, blob-lifecycle, subject-reachability and mail-profile batches 2026-08-19)
 
 ### Added in the saved-query batch (2026-08-19)
 
@@ -44,6 +44,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
   the nearest available proxy for that property — this revision replaces the
   proxy with the property. `UNDEFINE` stays reserved and unspecified rather than
   becoming a second spelling; implementations MUST NOT accept it as an alias.
+
+### Added in the mail-profile batch (2026-08-19)
+
+- **OMS Appendix A.8 Mail Profile (`mail:`)** — `mail:message_id`,
+  `mail:in_reply_to`, `mail:references`, `mail:from`/`to`/`cc`/`bcc`,
+  `mail:subject`, `mail:date`, `mail:folder`, `mail:direction`,
+  `mail:transport`, plus a normative RFC 5322 → OMS field mapping. Event grains
+  model LLM turns — `role` is a chat enum — and nothing in the specification
+  named a sender, recipient, subject line or `Message-ID`, so every mail-shaped
+  agent invented its own `context` keys and lost portability on exactly the
+  grains most worth porting. Answers `openmemoryspec/oms#12 §3` by its option
+  (a). Option (b), a first-class `thread_id` common field, was **rejected**: it
+  adds a compact key to a normative frozen field map for a concept `session_id`
+  already carries. The thread *is* the session (§28.6); `In-Reply-To` maps to
+  both `parent_message_id` (the parent grain's content address) and
+  `mail:in_reply_to` (the transport id — the only form available when the
+  parent was never ingested).
+- Two prohibitions carry privacy weight: `mail:message_id` MUST NOT be used as
+  or derived into a content address, and `mail:bcc` MUST NOT be populated from a
+  *received* message. A correspondent an agent asserts facts about SHOULD also
+  appear in `subject`, because §28.4.4 reaches structured references — a person
+  reachable only through a `context` key is not reachable by erasure or DSAR.
+- **CAL `domain_prefix` admits `mail`** — the production is closed by design (an
+  open prefix would turn every misspelled field into a valid domain field
+  instead of `CAL-E004`), so a new OMS profile needs this CAL change to be
+  queryable.
+- **Status:** this is the one part of the 1.6 draft written *ahead of* a
+  reference implementation rather than from working code, and it says so in the
+  spec. The field set is a starting point for comment.
 
 ### Added in the subject-reachability batch (2026-08-19)
 

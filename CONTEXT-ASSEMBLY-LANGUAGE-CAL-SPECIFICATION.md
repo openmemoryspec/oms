@@ -467,7 +467,8 @@ relation_shortcut = "relation" , "IS" , relation_category ;
 domain_field_condition = domain_field , comparator , value ;
 
 domain_field    = domain_prefix , ":" , identifier ;
-domain_prefix   = "hc" | "legal" | "fin" | "rob" | "sci" | "con" | "int" ;
+domain_prefix   = "hc" | "legal" | "fin" | "rob" | "sci" | "con" | "int"
+                | "mail" ;   (* new in 1.3, OMS Appendix A.8 *)
 
 relation_category = "PREFERENCE" | "KNOWLEDGE" | "PERMISSION" | "INTERACTION"
                   | "AGENCY" | "LIFECYCLE" | "OBSERVATION" ;
@@ -2608,7 +2609,13 @@ If a source fails, its allocated budget is redistributed and a revised `budget_a
 
 ## 12. Domain Profile Querying
 
-OMS defines domain profiles (healthcare, legal, finance, robotics, science, consumer, integration). CAL provides structured access to domain-tagged grains.
+OMS defines domain profiles (healthcare, legal, finance, robotics, science, consumer, integration, mail). CAL provides structured access to domain-tagged grains.
+
+`domain_prefix` is a **closed** production (§4), so a new OMS profile is not
+usable from CAL until this specification admits its prefix. `mail:` is admitted
+in 1.3 alongside OMS Appendix A.8; the closure is deliberate -- an open prefix
+would make every misspelled field name a valid domain field rather than
+`CAL-E004`.
 
 ### 12.1 Profile Querying via Tags
 
@@ -2631,6 +2638,7 @@ Domain-specific fields use OMS domain prefix convention:
 | Science | `sci:` | `sci:experiment_id`, `sci:dataset_id`, `sci:methodology`, `sci:reproducibility_status` |
 | Consumer | `con:` | `con:session_context`, `con:interaction_channel` |
 | Integration | `int:` | `int:source_system`, `int:correlation_id`, `int:sync_status` |
+| Mail | `mail:` | `mail:message_id`, `mail:from`, `mail:to`, `mail:subject`, `mail:folder` |
 
 **Example:**
 ```sql
