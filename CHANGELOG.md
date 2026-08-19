@@ -9,7 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query and template-identity batches 2026-08-19)
+## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query, template-identity and blob-lifecycle batches 2026-08-19)
 
 ### Added in the saved-query batch (2026-08-19)
 
@@ -44,6 +44,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
   the nearest available proxy for that property — this revision replaces the
   proxy with the property. `UNDEFINE` stays reserved and unspecified rather than
   becoming a second spelling; implementations MUST NOT accept it as an alias.
+
+### Added in the blob-lifecycle batch (2026-08-19)
+
+- **OMS §7.1.1 the `cas:` URI scheme** — `cas://sha256:<64-hex>`, used once as
+  an example URI since 1.0 and never defined. The address is the SHA-256 of the
+  **plaintext** bytes (so content addresses identically in an encrypted memory
+  and a plaintext one), a reader MUST verify it, resolution is memory-local and
+  never a network fetch, a reference is **not** a promise of presence, and a
+  malformed address fails closed before any lookup. Answers
+  `openmemoryspec/oms#12 §5`.
+- **OMS §28.4 `put_blob` / `get_blob`** — the operation table was grains-only.
+  `put_blob` is idempotent by construction (the address *is* the content);
+  `get_blob` verifies the digest before returning bytes.
+- **OMS §28.4.2 Blob concurrency** — a blob read needs no lock, because an
+  immutable object whose address is its checksum poses no consistency question.
+  Stated normatively because the alternative starves real callers: where a
+  memory lock is exclusive, a run holding the memory would otherwise block the
+  subprocess it spawned to process an attachment, for a lock protecting nothing.
+- **OMS §28.4.3 Blob lifecycle under erasure** — the GDPR-grade half.
+  Sole-referenced attachments MUST be reclaimed by subject erasure; reclamation
+  MUST be **targeted, never a store-wide sweep** (a census races an upload that
+  has happened while its referencing grain has not, and collecting it destroys
+  an unrelated caller's data); the surviving-reference check MUST run under the
+  erasure's own serialization; the report MUST count reclaimed blobs separately;
+  and crypto-erasure MUST reach blobs, since encrypting the database while
+  leaving attachments in the clear beside it encrypts the index and publishes
+  the documents. The byte-identical-concurrent-upload window is stated rather
+  than implied.
+- **CAL §8.14.1** carries the same obligation onto `FORGET SUBJECT`.
 
 ### Added in the template-identity batch (2026-08-19)
 

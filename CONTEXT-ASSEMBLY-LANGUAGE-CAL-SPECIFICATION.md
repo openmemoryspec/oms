@@ -1426,7 +1426,11 @@ PURGE OLDER THAN 30d TYPE event BECAUSE "transcript TTL"    -- age + one grain t
 - All three are **one-way** (§2.3): there is no `UNFORGET`, and a host MUST
   NOT offer an un-tombstone or un-erase mechanism through any interface.
 - An erasure execution SHOULD produce the host's erasure report; the audit
-  Observation (§8.14.4) references it.
+  Observation (§8.14.4) references it. Where the erased grains referenced
+  content-addressed attachments, erasure MUST also reclaim the ones no
+  surviving grain references, and the report MUST carry that count separately
+  from the grain count (OMS §28.4.3). A statement that erased a subject's
+  grains and left the subject's documents on disk has not erased the subject.
 
 #### 8.14.2 Authorization
 

@@ -744,6 +744,52 @@ Multi-modal content (images, audio, video, embeddings, sensor data) is reference
 | `checksum` | `ck` | string | RECOMMENDED | SHA-256 hash for integrity |
 | `metadata` | `md` | map | OPTIONAL | Modality-specific metadata |
 
+### 7.1.1 The `cas:` URI scheme (new in 1.6)
+
+`cas://sha256:<64-lowercase-hex>` addresses bytes held in a **content-addressed
+store** that the memory owns. Prior revisions used the scheme once, as an
+example URI in §7.1, and never defined it. This section does.
+
+```
+cas://sha256:a0864a70f3c1b9e2…      (exactly 64 lowercase hex characters)
+```
+
+**Normative rules:**
+
+1. **The address is the SHA-256 of the plaintext bytes.** Not of a stored,
+   compressed, or encrypted representation. A store that encrypts blobs at rest
+   MUST keep the address over the clear bytes, so the same content addresses
+   identically in an encrypted memory and a plaintext one. An address that
+   changed when a memory was encrypted would break every `content_refs` entry
+   pointing at it and would make `checksum` (§7.1) disagree with `uri` for no
+   semantic reason.
+2. **The address is a claim about the bytes, so a reader MUST check it.**
+   `get_blob` (§28.4) MUST verify the digest of the bytes it returns against the
+   address it was given and fail rather than return bytes that do not match.
+   Where blobs are sealed, the AEAD tag and the content address are independent
+   checks and an implementation SHOULD perform both — they fail on different
+   attacks.
+3. **Resolution is memory-local.** `cas://` names content in *this* memory's
+   store; it is not a network locator and MUST NOT be dereferenced by fetching a
+   URL. A grain that travels to a peer carries the address, and the peer
+   resolves it against its own store or reports it missing. Blobs do not
+   replicate implicitly with grains — an implementation that ships attachments
+   alongside a bundle MUST do so as an explicit part of that transfer.
+4. **A `cas://` reference is not a promise of presence.** Erasure (§28.4.3),
+   selective transfer, and partial imports all produce a memory that holds a
+   grain whose attachment is gone. Readers MUST treat a missing blob as an
+   expected outcome, not as corruption.
+5. **Malformed addresses fail closed.** An address that is not exactly
+   `cas://sha256:` followed by 64 hex characters MUST be rejected as invalid
+   input before any lookup. Addresses arrive from imported grains and from
+   callers; length-validating after slicing is how a truncated URI becomes a
+   panic.
+
+When `uri` is a `cas://` address, `checksum` (§7.1) is redundant with it: the
+address *is* the checksum. Implementations MAY populate both, and MUST reject
+the entry as malformed if they disagree.
+
+
 ### 7.2 Embedding Reference Schema
 
 ```json
@@ -3323,6 +3369,8 @@ OMS does not define a formal store API. However, implementations that expose a p
 | `delete` | `(content_address) → void \| error` | Compliance erasure (GDPR Art. 17, consent cascade, retention). MUST NOT be exposed as a general-purpose unauthenticated API; MAY be surfaced to authorized principals via CAL Tier 2 (`FORGET`/`PURGE`, CAL §8.14 — `delete`/`erase` verbs, §12.6), each execution writing an audit Observation. MUST check litigation holds (`invalidation_policy.mode: "hold"`) before deleting. **One-way:** additions roll back by retraction (supersession); a delete or erasure is final — no un-delete operation exists, and a host MUST NOT add one. |
 | `put_batch` | `(blob_bytes[]) → content_address[] \| error[]` | Batch ingest for consolidation, migration, and high-throughput scenarios |
 | `get_batch` | `(content_address[]) → grain[] \| not_found[]` | Batch retrieval for provenance chain traversal and context assembly |
+| `put_blob` | `(bytes) → cas_uri \| error` | Store multi-modal content in the memory's content-addressed store; returns its `cas://sha256:` address (§7.1.1). **Idempotent by construction** — the address is the content, so re-storing identical bytes returns the same address and writes nothing new |
+| `get_blob` | `(cas_uri) → bytes \| not_found \| error` | Fetch blob bytes, **verifying the digest against the address** before returning them (§7.1.1 rule 2) |
 
 Stores SHOULD implement `supersede` as a distinct operation rather than exposing raw `put` + index mutation separately. Supersession is the most error-prone operation (invalidation policy checks, derivation DAG traversal for `scope: "subtree"`, atomic index update) and deserves a dedicated, well-tested code path.
 
@@ -3420,6 +3468,66 @@ file was written with (whether text is indexed, whether entity relations are
 extracted, embedding provenance). These are infrastructure truths about one
 copy, and they MUST NOT replicate: a peer that cannot build a text index does
 not acquire one by importing a bundle that says it has one.
+
+### 28.4.2 Blob concurrency (new in 1.6)
+
+A blob is immutable and its address is its checksum. Those two properties
+together mean a blob read has **no consistency question to answer**, and a
+store SHOULD NOT impose one:
+
+- **Reads need no lock.** There is no version to be stale against, no partial
+  write to observe (a store MUST make blob writes atomic — write-then-rename or
+  the transactional equivalent — so a reader sees the whole blob or none of
+  it), and any corruption the absent lock could admit is caught by the digest
+  check that §7.1.1 already requires. This matters concretely on stores whose
+  memory lock is exclusive: a run holding a memory would otherwise starve the
+  very subprocess it spawned to process an attachment, for a lock protecting
+  nothing.
+- **Writes need no coordination.** Two writers storing identical bytes converge
+  by construction; two writers storing different bytes are writing to different
+  addresses.
+
+### 28.4.3 Blob lifecycle under erasure (new in 1.6)
+
+**A blob is in scope for erasure.** A subject's invoice PDF, voice recording, or
+scanned ID is personal data as surely as the grain that references it, and it is
+usually the *more* sensitive half. Erasing every grain that references it while
+leaving the bytes on disk satisfies no erasure obligation, and an implementation
+that reported such an operation as successful would be reporting an erasure it
+did not perform. This is the same severity class as the vault rule in §10.5.2,
+and it is normative for the same reason.
+
+1. **Subject erasure MUST reclaim sole-referenced attachments.** When erasure
+   (CAL `FORGET SUBJECT`, or the host equivalent) removes a set of grains, every
+   `cas://` address those grains referenced that **no surviving grain
+   references** MUST be destroyed in the same operation. An address still
+   referenced by a survivor MUST be kept: the blob is shared, and the surviving
+   reference is a legitimate claim on it.
+2. **Reclamation MUST be targeted, never a store-wide sweep.** The candidate set
+   is the erased grains' own references — not a census of every blob in the
+   store. A whole-store mark-and-sweep races concurrent writes: content uploaded
+   but not yet referenced by its grain looks unreferenced to a census taken
+   between the two, and collecting it destroys an unrelated caller's data. A
+   general garbage collection over blobs MAY be offered as a separate,
+   explicitly-invoked operation, and one that scans the whole store MUST require
+   quiescent writers.
+3. **The surviving-reference check MUST run under the same serialization as the
+   erasure.** Checking outside it reintroduces exactly the race rule 2 avoids.
+4. **The erasure report MUST state how many blobs it reclaimed**, as a distinct
+   count from grains erased. An operator confirming an Art. 17 request needs to
+   see that the attachments went, and a zero where attachments existed is the
+   signal that they did not.
+5. **Crypto-erasure MUST reach blobs.** Where a memory is encrypted, blob
+   contents MUST be sealed under a key derived from the memory's key, so
+   destroying that key destroys the attachments with the grains. A store that
+   encrypts its database while leaving attachments in the clear beside it has
+   encrypted the index and published the documents.
+
+**Residual limit, stated rather than implied.** Byte-identical content uploaded
+by a concurrent writer in the instant an erasure runs may survive it, because
+the two are indistinguishable by address — that is what content addressing
+means. Implementations SHOULD document this window rather than describe
+reclamation as unconditional.
 
 ### 28.5 Agent Capability Convention
 
