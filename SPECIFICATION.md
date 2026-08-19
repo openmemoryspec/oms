@@ -707,7 +707,7 @@ When a Goal or Fact grain uses the `mg:delegates_to` relation, the following fie
 > field would be absent on every one of them. A type whose fields are declared
 > so they can be queried must not then hide the field people query by.
 
-### 6.14 Compaction Rules
+### 6.15 Compaction Rules
 
 - Serializers MUST replace full field names with short keys before encoding
 - Deserializers MUST replace short keys with full field names after decoding
@@ -3545,8 +3545,8 @@ reclamation as unconditional.
 
 ### 28.4.4 Subject reachability (new in 1.6)
 
-CAL §8.14 defines the erasure selector (`FORGET SUBJECT "<id>"`) and §8.14 its
-read-only mirror (`REPORT SUBJECT`), and prior revisions said what those
+CAL §8.14 defines the erasure selector (`FORGET SUBJECT "<id>"`) and CAL §8.19
+its read-only mirror (`REPORT SUBJECT`), and prior revisions said what those
 statements *mean* without ever saying what they must **reach**. That gap is not
 academic. It was found in a conforming implementation as a silent
 under-erasure:

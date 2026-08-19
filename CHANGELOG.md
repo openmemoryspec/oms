@@ -69,6 +69,10 @@ Answers `openmemoryspec/oms#12 §7`.
   revision" under a 1.6-draft header; it now describes the 1.6 draft, and the
   byte-range sentence reads `0x01`–`0x0C` unchanged (Trigger takes `0x0D`).
   Footer dates across all three documents moved to 2026-08-19.
+- **Duplicate section number `§6.14`.** The trigger batch added "§6.14
+  Trigger-Specific Fields" without renumbering the "§6.14 Compaction Rules" that
+  followed it — the same bump the Recommendation type did on its way in.
+  Compaction Rules is now §6.15; nothing referenced it by number.
 - **`CONTRIBUTING.md` pointed at `oms-specification.md`**, a file that has never
   existed in this repository. The checklist now names the three documents that
   do, and asks for the changelog entry.
