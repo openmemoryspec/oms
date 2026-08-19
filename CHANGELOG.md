@@ -9,7 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query, template-identity, blob-lifecycle, subject-reachability and mail-profile batches 2026-08-19)
+## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query, template-identity, blob-lifecycle, subject-reachability, mail-profile and housekeeping batches 2026-08-19)
 
 ### Added in the saved-query batch (2026-08-19)
 
@@ -44,6 +44,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
   the nearest available proxy for that property — this revision replaces the
   proxy with the property. `UNDEFINE` stays reserved and unspecified rather than
   becoming a second spelling; implementations MUST NOT accept it as an alias.
+
+### Fixed in the housekeeping batch (2026-08-19)
+
+Answers `openmemoryspec/oms#12 §7`.
+
+- **`mg:step_action:<node_id>` joins the relation vocabularies** (OMS §8, CAL
+  §7.1). It was used normatively in §8.4 while appearing in no vocabulary list,
+  so a conformant validator warned `CAL-W001` — "unknown `mg:` relation" — on
+  this specification's own relation. It is the first **parameterized** standard
+  relation (the node id is part of the value), so CAL §7.3 now states the
+  matching rule: parameterized rows match by prefix, everything else by exact
+  value.
+- **CAL §14.3 had two disclosure models and admitted one.** The grammar has read
+  `disclosure_level = "summary" | "headlines" | "full"` since 1.0, against a
+  §14.3 table naming `summary | standard | full`. They were never the same
+  control: one is **metadata density** (how many attributes an element carries),
+  the other is **body extent** (how much free text survives). §14.3 now
+  documents both axes and how they compose, including that `full` is *additive*
+  — it carries a Skill's `instructions`/`when_to_use`, which no other level
+  does at any budget — and that omitting the option is **not** a level but a
+  request to leave each format's established output alone.
+- **Version markers reconciled.** `SPECIFICATION.md`'s footer said "the v1.5
+  revision" under a 1.6-draft header; it now describes the 1.6 draft, and the
+  byte-range sentence reads `0x01`–`0x0C` unchanged (Trigger takes `0x0D`).
+  Footer dates across all three documents moved to 2026-08-19.
+- **`CONTRIBUTING.md` pointed at `oms-specification.md`**, a file that has never
+  existed in this repository. The checklist now names the three documents that
+  do, and asks for the changelog entry.
 
 ### Added in the mail-profile batch (2026-08-19)
 

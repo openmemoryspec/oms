@@ -57,7 +57,11 @@ Open a pull request directly with:
 
 ### Pull Request Requirements
 
-- [ ] Changes are in `oms-specification.md`
+- [ ] Changes are in the right document — `SPECIFICATION.md` (the `.mg` format
+      and store conventions), `CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md`
+      (the query language), or
+      `SEMANTIC-MARKUP-LANGUAGE-SML-SPECIFICATION.md` (the render format) —
+      and `CHANGELOG.md` records them
 - [ ] New normative requirements use correct RFC 2119 language (MUST/SHOULD/MAY)
 - [ ] Test vectors are updated if the binary format changes
 - [ ] Conformance level impact is noted if applicable

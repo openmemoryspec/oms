@@ -874,6 +874,20 @@ The `mg:` namespace is reserved for standard semantic relations. Applications de
 | `mg:depends_on` | Goal | Task dependency (distinct from `parent_goals` hierarchy) |
 | `mg:assigned_to` | Goal | Task assigned to agent for execution |
 | `mg:capable_of` | Skill | Learned skill with proficiency and strategies (§8.11; legacy Fact convention retained for back-compat) |
+| `mg:step_action:<node_id>` | Tool | Execution record linking a Tool grain to the Workflow node it ran (§8.4). **Parameterized** — see below |
+
+**Parameterized relations.** `mg:step_action:<node_id>` is the first standard
+relation whose full value is not a fixed string: the node identifier is part of
+it, so the vocabulary above lists a *prefix* rather than a member. It was used
+normatively in §8.4 from the revision that introduced it while appearing in no
+vocabulary list, which made a conformant validator warn (CAL-W001, "unknown
+`mg:` relation") on this specification's own relation.
+
+Validators MUST therefore match `mg:` relations against the vocabulary by
+**prefix where a row is marked parameterized**, and exact value otherwise.
+Implementations that index relations by exact value need a prefix scan to find
+these; that is a consequence of parameterizing a relation, and the reason no
+other standard relation does it.
 
 ### 8.1 Fact (type = 0x01)
 
@@ -4552,7 +4566,7 @@ content_address = sha256(blob).hex()
 
 ---
 
-**Document Status:** This is the v1.5 revision of the .mg format specification. It adds the dedicated **Recommendation** grain type (`0x0C`, §8.12) — a governed, auditable proposal to change memory or agent configuration, with a supersession-based content model and an audit-grain lifecycle — realized from the reserved range following the Skill (`0x0B`) precedent; byte values `0x01`–`0x0B` are unchanged, so existing content addresses remain valid. (The prior v1.4 revision renamed `belief`→`fact` (`0x01`) and `action`→`tool` (`0x05`), redesigned the Workflow grain as a directed graph, added the `embedding_text` common field, and added the Skill grain type (`0x0B`, §8.11).) Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
+**Document Status:** This is the **v1.6 draft** of the .mg format specification, open for comment. It adds the **Trigger** grain type (`0x0D`, §8.13) and its execution contract (§27.8), pseudonymized egress (§10.5), the authorization model (§12.6), the host metadata table (§28.4.1), the `cas:` URI scheme (§7.1.1) with blob operations and their erasure obligations (§28.4.2–§28.4.3), the subject-reachability conformance requirement (§28.4.4), and the `mail:` domain profile (Appendix A.8); it removes §27.6 and `Workflow.trigger`. (The prior v1.5 revision added the dedicated **Recommendation** grain type (`0x0C`, §8.12) — a governed, auditable proposal to change memory or agent configuration, with a supersession-based content model and an audit-grain lifecycle — realized from the reserved range following the Skill (`0x0B`) precedent.) Byte values `0x01`–`0x0C` are unchanged, so existing content addresses remain valid. (The v1.4 revision renamed `belief`→`fact` (`0x01`) and `action`→`tool` (`0x05`), redesigned the Workflow grain as a directed graph, added the `embedding_text` common field, and added the Skill grain type (`0x0B`, §8.11).) Submitted as a standards track document for consideration as an IETF RFC and W3C standard. Community feedback is encouraged through issue tracking and discussion forums.
 
-**Last Updated:** 2026-08-03
+**Last Updated:** 2026-08-19
 **License:** This document is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)

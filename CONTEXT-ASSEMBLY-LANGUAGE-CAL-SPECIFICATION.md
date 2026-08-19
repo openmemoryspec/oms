@@ -982,6 +982,7 @@ OMS defines a standard `mg:` relation vocabulary. CAL provides first-class suppo
 | `mg:handed_off_to` | Interaction | Agent DID | Agent DID | Agent handoff |
 | `mg:depends_on` | Lifecycle | Goal | Goal | Goal dependency |
 | `mg:assigned_to` | Agency | Task | Agent DID | Task assignment |
+| `mg:step_action:<node_id>` | Workflow | Tool grain | Workflow hash | Execution record: which node of a plan this Tool grain ran (OMS §8.4). **Parameterized** |
 
 ### 7.2 Relation Category Shortcuts
 
@@ -1011,6 +1012,12 @@ RECALL WHERE subject = "did:key:z6Mk..." AND relation IS PERMISSION
 ### 7.3 mg: Relation Validation
 
 The parser SHOULD validate `mg:` prefixed relation values against the known vocabulary. Unknown `mg:` relations produce warning `CAL-W001` (not an error).
+
+**Parameterized relations match by prefix.** A row marked *Parameterized* in
+§7.1 lists a prefix, not a value: `mg:step_action:node_3` is a member of the
+vocabulary. A validator matching only exact values warns `CAL-W001` on a
+relation OMS §8.4 defines normatively -- which is precisely what implementations
+did while this row was missing from the table.
 
 ---
 
@@ -2780,13 +2787,49 @@ When the query specifies a format list (`FORMAT [markdown, json]`), the response
 
 ### 14.3 Progressive Disclosure
 
+Progressive disclosure has **two orthogonal axes**, and prior revisions
+described only the first while the grammar (§4) admitted only the second --
+`disclosure_level` has been `summary | headlines | full` since 1.0, against a
+table naming `summary | standard | full`. Both axes are real; they are separate
+controls.
+
+**Axis 1 -- metadata density.** How many attributes each element carries. This
+is the axis the table below describes, and the default an implementation
+applies when no option is given:
+
 | Level | Metadata Density | When Used |
 |-------|-----------------|-----------|
 | `summary` | Tag name + subject + content only | Token budget tight (<1000 tokens) |
 | `standard` | + confidence, role, state, time | Default |
 | `full` | + source_type, importance, tags, verification_status | Token budget generous or LIMIT <= 5 |
 
-Progressive disclosure controls **metadata density on a flat structure**, not nesting depth. The element shape stays the same across all levels -- only the number of attributes changes.
+**Axis 2 -- body extent.** How much of each grain's free-text *body* survives
+the render. This is what `WITH progressive_disclosure(<level>)` selects, and its
+levels are the grammar's:
+
+| Level | Body extent |
+|-------|-------------|
+| `summary` | Free-text bodies clipped to a short lead (a reference implementation uses 40 characters) |
+| `headlines` | Clipped to a longer lead (a reference implementation uses 80 characters) |
+| `full` | Bodies whole, **and** the long-form definition text no other level carries -- a Skill's `instructions` and `when_to_use` |
+
+`full` is additive rather than merely unclipped: the long-form fields are
+omitted at every other level regardless of budget, because they are the fields
+that dominate a Skill grain's token cost.
+
+The bare option (`WITH progressive_disclosure`, no level) means `full`.
+**Omitting the option entirely is not a level** -- it leaves each format's
+established output unchanged, which is what keeps the option additive for
+callers who never passed it.
+
+The two axes compose: an element may carry full metadata over a clipped body,
+or minimal metadata over a whole one. Neither axis controls nesting depth --
+the element shape is flat and stays the same at every level, on both axes.
+
+This is the same ladder as OMS §10.5's tier model and the `ELEMENT_SUMMARY` /
+`ELEMENT_OMIT` template sections (§10.6): one mechanism -- degrade the body
+before dropping the grain -- surfaced as a query option, a template section, and
+a budget-pressure fallback.
 
 ### 14.4 Per-Grain-Type Content Projection
 
@@ -3873,6 +3916,6 @@ ROLE                                        -- DEFINE ROLE, deferred (§3.2)
 
 **Document Status:** This is the CAL (Context Assembly Language) Specification v1.3, **draft for comment**. It defines a deterministic, LLM-native context assembly, evolution, destruction, and control language for OMS-compliant memory databases — append-only by construction for evolution, authorization-gated for destruction and control. CAL is part of the Open Memory Specification (OMS) v1.6 draft — see [SPECIFICATION.md](./SPECIFICATION.md).
 
-**Last Updated:** 2026-08-10
+**Last Updated:** 2026-08-19
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
 **Copyright:** Public Domain (CC0 1.0 Universal)

@@ -143,6 +143,6 @@ See the [CAL specification](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md) fo
 
 **Document Status:** This is the SML (Semantic Markup Language) Specification v1.1. SML is part of the Open Memory Specification (OMS) v1.5 — see [SPECIFICATION.md](./SPECIFICATION.md).
 
-**Last Updated:** 2026-08-03
+**Last Updated:** 2026-08-19
 **License:** This specification is offered under the Open Web Foundation Final Specification Agreement (OWFa 1.0)
 **Copyright:** Public Domain (CC0 1.0 Universal)
