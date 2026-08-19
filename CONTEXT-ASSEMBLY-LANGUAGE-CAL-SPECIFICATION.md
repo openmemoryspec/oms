@@ -127,7 +127,7 @@ The line between the append-only tiers (0/1) and Tier 2 is: **can the operation 
 
 ### 1.5 Relationship to OMS
 
-CAL operates on the 12 grain types defined by OMS v1.6: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill, Recommendation. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
+CAL operates on the 13 grain types defined by OMS v1.6: Fact, Event, State, Workflow, Tool, Observation, Goal, Reasoning, Consensus, Consent, Skill, Recommendation, Trigger. CAL treats this as a **closed set** -- custom types are not queryable via CAL.
 
 CAL extends the Store Protocol Convention defined in OMS §28.4 ([SPECIFICATION.md](./SPECIFICATION.md)) with a formal query language. Where OMS defines the `query`, `search`, and `supersede` store operations, CAL provides a structured, deterministic syntax for invoking them safely.
 
@@ -266,7 +266,7 @@ recall_priority, epistemic_status
 ```
 role, session_id, parent_message_id, model_id, content,
 context, plan,
-trigger, nodes, edges, bindings, retries,
+nodes, edges, bindings, retries,
 tool_name, tool_phase, is_error, tool_call_id,
 observer_id, observer_type,
 goal_state, assigned_agent, deadline, depends_on,
@@ -455,7 +455,7 @@ grain_field_name = event_field | state_field | workflow_field
 
 event_field     = "role" | "session_id" | "parent_message_id" | "model_id" | "content" ;
 state_field     = "context" | "plan" ;
-workflow_field  = "trigger" | "node" | "binding" ;
+workflow_field  = "node" | "binding" ;
 action_field    = "tool_name" | "tool_phase" | "is_error" | "tool_call_id" ;
 observation_field = "observer_id" | "observer_type" ;
 goal_field      = "goal_state" | "assigned_agent" | "deadline" | "depends_on" ;
@@ -569,12 +569,14 @@ run_loop_stmt   = "RUN" , "LOOP" , [ "FULL" ] , [ with_clause ] ;
 (* --- Workflow graph syntax --- *)
 
 workflow_add_stmt       = "ADD" , "workflow" , string_literal ,
-                          [ on_clause ] , graph_line , { graph_line } ,
+                          graph_line , { graph_line } ,
                           { bind_clause } , reason_clause ;
 workflow_supersede_stmt = "SUPERSEDE" , hash_literal ,
-                          [ on_clause ] , graph_line , { graph_line } ,
+                          graph_line , { graph_line } ,
                           { bind_clause } , reason_clause ;
-on_clause               = "ON" , string_literal ;
+(* `on_clause` removed in 1.3: it set OMS's `Workflow.trigger`, which 1.6
+   removes. A trigger is a Trigger grain that names its workflow (OMS §8.13).
+   "ON" remains a keyword, used by GRANT and REVOKE. *)
 bind_clause             = "BIND" , node_name , "=" , hash_literal ;
 
 graph_line              = node_or_group , { "->" , node_or_group , [ when_mod ] , [ repeat_mod ] } ;
@@ -614,11 +616,13 @@ positive_integer = digit+ ;
 
 grain_type_plural   = "facts" | "events" | "states" | "workflows" | "tools"
                     | "observations" | "goals" | "reasonings" | "consensuses"
-                    | "consents" | "skills" | "recommendations" ;
+                    | "consents" | "skills" | "recommendations"
+                    | "triggers" ;
 
 grain_type_singular = "fact" | "event" | "state" | "workflow" | "tool"
                     | "observation" | "goal" | "reasoning" | "consensus"
-                    | "consent" | "skill" | "recommendation" ;
+                    | "consent" | "skill" | "recommendation"
+                    | "trigger" ;
 ```
 
 ---
@@ -641,6 +645,7 @@ grain_type_singular = "fact" | "event" | "state" | "workflow" | "tool"
 | Consent | `consents` | `consent` | 0x0A |
 | Skill | `skills` | `skill` | 0x0B |
 | Recommendation | `recommendations` | `recommendation` | 0x0C |
+| Trigger | `triggers` | `trigger` | 0x0D |
 
 ### 5.2 Common Field Types
 
@@ -737,7 +742,6 @@ All Fact fields are in the common set (`subject`, `relation`, `object`, `confide
 
 | Field | Type | Operators | Notes |
 |-------|------|-----------|-------|
-| `trigger` | String | `=`, `!=` | Trigger condition (e.g., `"on:merge_to_main"`) |
 | `node` | String | `=` | Match workflows containing a specific node |
 | `binding` | String | `=` | Match workflows binding to a specific Tool grain hash |
 
@@ -819,6 +823,29 @@ All Fact fields are in the common set (`subject`, `relation`, `object`, `confide
 Recommendation grains are engine-emitted proposals and are **not CAL-addable** — like Events, Tools, and States, they are absent from the addable whitelist enforced by `CAL-E051` (Appendix C). `RECALL recommendations` reads the proposal queue, and lifecycle transitions occur only through the host's review/apply path (§8.12.1 of the OMS spec), never via `ADD`/`SUPERSEDE SET`.
 
 > **Note — why `rec_status` is type-scoped:** `verification_status` is a `meta_field_name` (§4), queryable on every grain type. `rec_status` is instead a `recommendation_field`, because it is meaningful only for this one type — a Recommendation's review state has no analogue on a Fact or an Event. Both are index-layer fields in OMS (§6.1 of the OMS spec); the asymmetry in CAL is deliberate scoping, not an oversight.
+
+#### Trigger (0x0D) -- `RECALL triggers`
+
+| Field | Type | Operators | Notes |
+|-------|------|-----------|-------|
+| `kind` | String | `=`, `!=`, `IN` | `"interval"`, `"schedule"`, `"once"`, `"polling"`, `"memory"`, `"webhook"`, `"manual"`, `"composite"` |
+| `workflow` | String | `=`, `IN` | Content address of the Workflow this trigger starts |
+| `connector` | String | `=`, `!=`, `IN` | External system name, e.g. `"gmail"` |
+| `scope` | String | `=`, `CONTAINS`, `STARTS WITH` | What is watched |
+| `enabled` | Boolean | `=`, `!=` | Whether the trigger is live |
+| `cron` | String | `=`, `CONTAINS` | Calendar expression |
+
+These are **first-class fields, not `context` keys**, which is the point: a
+trigger's cadence and target must be filterable. `RECALL triggers WHERE enabled
+= true AND connector = "gmail"` is the query this type exists to make possible,
+and it is why §8.13 of the OMS spec declares them rather than carrying them in a
+`context`-shaped map. Connector transport configuration remains in `config` and
+is not queryable.
+
+Operational state — when a trigger last fired, where its cursor is, whether it
+is currently claimed — is deliberately **not** in the grain and therefore not
+queryable through CAL. It is host-local (OMS §27.8) and does not travel with the
+memory.
 
 ### 6.4 Type-Specific ADD Extensions
 
@@ -1180,32 +1207,27 @@ Workflows use a dedicated graph syntax instead of SET clauses. The graph is expr
 ```sql
 -- Simple linear workflow
 ADD workflow "nightly backup"
-  ON "cron 0 2 * * *"
   snapshot -> compress -> upload
   REASON "automate database backups"
 
 -- Parallel fork/join
 ADD workflow "code review"
-  ON "PR opened"
   lint -> (security_review, compliance_review) -> evaluate
   REASON "parallel review gates"
 
 -- Conditional branching
 ADD workflow "release gate"
-  ON "review complete"
   evaluate -> implement WHEN "approved"
   evaluate -> reject WHEN "rejected"
   REASON "approval-based routing"
 
 -- Retry on failure
 ADD workflow "resilient deploy"
-  ON "release"
   build -> deploy * 3 -> notify
   REASON "retry deploy up to 3 times"
 
 -- Full pipeline with bindings
 ADD workflow "release pipeline"
-  ON "merge to main"
   build -> (unit_test, lint) -> integration_test
   integration_test -> stage_deploy * 3
   stage_deploy -> approval
@@ -1219,7 +1241,7 @@ ADD workflow "release pipeline"
   REASON "standard release process"
 ```
 
-**Clause order (fixed):** name → ON → graph lines → BIND → REASON
+**Clause order (fixed):** name → graph lines → BIND → REASON
 
 **Graph operators:**
 
@@ -1255,7 +1277,6 @@ SUPERSEDE sha256:target_hash
 
 ```sql
 SUPERSEDE sha256:abc123...
-  ON "merge to main"
   build -> (unit_test, lint, security_scan) -> integration_test
   integration_test -> canary_deploy * 3
   canary_deploy -> approval
@@ -1671,7 +1692,8 @@ Each grain type defines a **content rule** (what becomes the text content of the
 | **Observation** | `object` (what was observed) | `observer`? |
 | **Reasoning** | `conclusion` | `type`? |
 | **State** | `plan` (summary) | `context`? |
-| **Workflow** | `nodes` (joined as readable text) | `trigger`? |
+| **Workflow** | `nodes` (joined as readable text) | `name`? |
+| **Trigger** | what the rule watches | `kind`, `scope`? |
 | **Consensus** | `object` (the agreed claim) | `threshold`?, `count`? |
 | **Consent** | `purpose` | `action`, `grantor`, `grantee` |
 | **Skill** | `description` (what the skill enables) | `name`, `proficiency`?, `domain`? |
@@ -1887,7 +1909,7 @@ A template that needs more than one section — a `HEADER`, a `FOOTER`, an
 explicit `ELEMENT_SUMMARY`, a `SOURCE_BREAK` — MUST use the section list. A
 definition MUST NOT combine the two forms.
 
-**All 12 grain types rendered:**
+**All 13 grain types rendered:**
 ```sml
 <context intent="helping alice prepare her Q1 engineering review">
 
@@ -1913,7 +1935,7 @@ definition MUST NOT combine the two forms.
 
   <state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>
 
-  <workflow trigger="review_prep_requested">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>
+  <workflow name="review prep">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>
 
   <consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>
 
@@ -2020,11 +2042,12 @@ Where:
 | `observations` | `observer`, `content` |
 | `reasonings` | `type`, `content` |
 | `states` | `context`, `content` |
-| `workflows` | `trigger`, `content` |
+| `workflows` | `name`, `content` |
 | `consensuses` | `threshold`, `count`, `content` |
 | `consents` | `grantor`, `grantee`, `action`, `content` |
 | `skills` | `name`, `content`, `proficiency` |
 | `recommendations` | `target`, `content`, `severity` |
+| `triggers` | `kind`, `content` |
 
 At `summary` disclosure, `confidence`, `state`, `phase`, and `type` columns are omitted.
 At `full` disclosure, additional columns `source` and `observed` are appended.
@@ -2444,7 +2467,8 @@ Each grain type projects its fields into a **text content** string and **attribu
 | Observation | `object` | `<observation observer="system">alice opened incident-dashboard at 09:14 UTC</observation>` |
 | Reasoning | `conclusion` | `<reasoning type="deductive">alice is prioritising reliability given 3 P0 incidents; lead with incident reduction narrative</reasoning>` |
 | State | `plan` summary | `<state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>` |
-| Workflow | `nodes` joined | `<workflow trigger="review_prep_requested">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>` |
+| Workflow | `nodes` joined | `<workflow name="review prep">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>` |
+| Trigger | what it watches | `<trigger kind="polling" scope="mailbox:accounts@example.com">poll the accounting mailbox every 2 minutes for invoices</trigger>` |
 | Consensus | `object` | `<consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>` |
 | Consent | `purpose` | `<consent action="granted" grantor="alice" grantee="agent">access engineering metrics dashboards for review preparation</consent>` |
 | Skill | `description` | `<skill name="incident_retro" proficiency="0.82" domain="engineering">run a blameless incident retrospective and distil the recurring themes</skill>` |
@@ -3413,7 +3437,7 @@ ROLE                                        -- DEFINE ROLE, deferred (§3.2)
 | Event | `content` | String | `=` |
 | State | `context` | String | `=`, `!=` |
 | State | `plan` | String | `=` |
-| Workflow | `trigger` | String | `=`, `!=` |
+| Workflow | `node` | String | `=` |
 | Workflow | `node` | String | `=` |
 | Workflow | `binding` | String | `=` |
 | Tool | `tool_name` | String | `=`, `!=`, `IN` |

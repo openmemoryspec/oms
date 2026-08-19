@@ -209,7 +209,8 @@ Hexadecimal values are lowercase. Byte sequences are represented in hex with spa
 | 0x0A | **Consent** | Permission grant or withdrawal — DID-scoped, purpose-bounded |
 | 0x0B | **Skill** | Packaged, reusable agent capability — definition (how-to, tools, resources) plus optional learned proficiency |
 | 0x0C | **Recommendation** | Governed, auditable proposal to change memory or agent configuration — reviewed, applied, and rollback-able |
-| 0x0D–0xEF | Reserved | Future standard types |
+| 0x0D | **Trigger** | Standing rule that starts a Workflow — an interval, a schedule, a source to poll, a condition to watch |
+| 0x0E–0xEF | Reserved | Future standard types |
 | 0xF0–0xFF | Domain profile types | Application-defined per Appendix A domain profiles |
 
 **Bytes 3-4 — Namespace Hash:** First two bytes of SHA-256(namespace), encoded as `uint16` big-endian. Provides 65,536 routing buckets without deserialization. Full namespace string remains authoritative in payload. This field is a routing hint only and MUST NOT be used for security decisions (see §13.3, §20).
@@ -503,7 +504,6 @@ To minimize blob size, human-readable field names are mapped to short keys befor
 
 | Full Name | Short Key | Type | Notes |
 |-----------|-----------|------|-------|
-| `trigger` | `trigger` | string | Activation condition |
 | `nodes` | `nodes` | array[string] | Graph node IDs/labels |
 | `edges` | `edges` | array[map] | Directed edges (see §8.4 edge schema) |
 | `bindings` | `bind` | map[string→string] | Node ID → Tool definition grain hash |
@@ -679,6 +679,34 @@ When a Goal or Fact grain uses the `mg:delegates_to` relation, the following fie
 | `metric_snapshot` | `msnap` | map |
 | `evidence_query` | `evq` | string |
 
+### 6.14 Trigger-Specific Fields
+
+| Full Name | Short Key | Type | Notes |
+|-----------|-----------|------|-------|
+| `kind` | `aknd` | string | Shared with Tool's `kind` — same field name, same short key; the type byte disambiguates the value space |
+| `workflow` | `twf` | string | Content address of the Workflow this trigger starts |
+| `connector` | `tcon` | string | |
+| `scope` | `tscp` | string | |
+| `enabled` | `tena` | bool | **Always emitted**, unlike most defaulted booleans — see below |
+| `dedup_key` | `tdk` | array[string] | |
+| `interval_secs` | `tint` | int | |
+| `cron` | `tcron` | string | |
+| `at_ms` | `tat` | int64 | |
+| `predicate` | `tpred` | map | Inner keys are the expression's own and are NOT compacted |
+| `members` | `tmem` | map[string→string] | Alias → trigger content address |
+| `correlate` | `tcorr` | string | |
+| `window_ms` | `twin` | int64 | |
+| `concurrency` | `tconc` | string | |
+| `catchup` | `tcatch` | string | |
+| `config` | `tcfg` | map | `int:` keys compact per §A.7; connector-specific keys stay verbatim |
+
+> **`enabled` is a deliberate exception to omit-when-default.** Omitting a
+> defaulted value exists to keep *pre-existing* blobs byte-identical across a
+> rollout, and a newly registered type has none. Omitting it would instead break
+> the most natural query over triggers — selecting the live ones — because the
+> field would be absent on every one of them. A type whose fields are declared
+> so they can be queried must not then hide the field people query by.
+
 ### 6.14 Compaction Rules
 
 - Serializers MUST replace full field names with short keys before encoding
@@ -849,7 +877,6 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 - `created_at` (int64, epoch ms)
 
 **Optional fields:**
-- `trigger` (string) — condition that activates this workflow
 - `edges` (array[map]) — directed edges between nodes (see edge schema below). When absent, nodes are unconnected.
 - `bindings` (map[string→string]) — maps node IDs to Tool definition grain hashes (`tool_phase: "definition"`). Unbound nodes are resolved by convention (tool name match) or treated as abstract steps.
 - `retries` (map[string→int]) — maps node IDs to maximum repeat count on failure. Absent means no retry.
@@ -894,7 +921,6 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 ```json
 {
   "type": "workflow",
-  "trigger": "merge to main",
   "nodes": ["build", "test", "deploy"],
   "edges": [
     {"src": "build", "dst": "test"},
@@ -909,7 +935,6 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 ```json
 {
   "type": "workflow",
-  "trigger": "PR opened",
   "nodes": ["lint", "security", "compliance", "evaluate"],
   "edges": [
     {"src": "lint", "dst": "security"},
@@ -926,7 +951,6 @@ Directed graph of procedural steps — plans, pipelines, and multi-path processe
 ```json
 {
   "type": "workflow",
-  "trigger": "release requested",
   "nodes": ["build", "unit_test", "lint", "integration_test", "stage_deploy", "approval", "prod_deploy", "rollback", "notify"],
   "edges": [
     {"src": "build", "dst": "unit_test"},
@@ -1153,6 +1177,121 @@ Where a Reasoning grain (§8.8) records *why the agent believes something* and a
 7. Recommendation grains SHOULD use a dedicated namespace (e.g. `"agent:recommendations"`) to keep the proposal queue efficiently discoverable and separable from user memory.
 8. **Execution authority.** A stored `proposal_cal` is CAL authored by one principal and executed later by another, so it does not carry a capability of its own — CAL binds every query to a `CapabilityToken` at execution time (CAL §2.3). An applier MUST execute the batch under the **approving principal's** capability, never the analyzer's and never an ambient store authority; for an auto-applied recommendation it is the host-configured policy principal for the recommendation's namespace, not a principal derived from `observer_id` — that field is a host-asserted label with no normative structure and MUST NOT be resolved to a capability. An applier MUST reject a proposal whose writes resolve outside the recommendation's own namespace: a recommendation MUST NOT propose writes into a namespace it does not itself inhabit.
 9. **Bounds and target validation.** `proposal_cal` MUST NOT exceed CAL's `MAX_QUERY_LENGTH` (8192 bytes), and applying it is subject to the same Tier-1 write quotas as any other CAL batch (CAL §2.3). Before applying a `proposal_edit`, a host MUST resolve the `doc:` target against an allowlist and MUST verify `base_digest` against the current document head, rejecting the proposal if the base has drifted. `proposal_data` is opaque to OMS: a host MUST validate it against its own schema before applying, and SHOULD require it to be signed (§9) when the recommendation crosses a trust boundary.
+
+### 8.13 Trigger (type = 0x0D)
+
+A standing rule that starts a Workflow — an interval, a calendar schedule, an
+external source to poll, a condition over this memory, or a gate over other
+triggers.
+
+**Required fields:**
+- `type` = "trigger"
+- `kind` (string) — see the kind registry below
+- `workflow` (string) — content address of the Workflow grain (§8.4) this
+  trigger starts
+- `created_at` (int64, epoch ms)
+
+**Optional fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `connector` | string | Name of the external system, e.g. `"gmail"`, `"stripe"`. Part of the firing identity (see §27.8) |
+| `scope` | string | What is watched, in the connector's own vocabulary, e.g. `"mailbox:accounts@example.com"` |
+| `enabled` | bool | Whether the trigger is live. Default `true` |
+| `dedup_key` | array[string] | JSON Pointers (RFC 6901) into an item, joined in order, identifying the *occurrence* |
+| `interval_secs` | int | Seconds between firings, for `interval` and `polling` |
+| `cron` | string | Calendar expression, for `schedule` |
+| `at_ms` | int64 | Absolute instant, for `once` |
+| `predicate` | map | A filter expression: selects grains for `memory`, composes members for `composite` |
+| `members` | map[string→string] | Alias → trigger content address, for `composite` |
+| `correlate` | string | JSON Pointer whose value correlates member firings |
+| `window_ms` | int64 | How long a partial `composite` match stays live |
+| `concurrency` | string | `"forbid"` (default) \| `"allow"` \| `"replace"` |
+| `catchup` | string | `"last"` (default) \| `"none"` \| `"all"` |
+| `config` | map | Connector transport configuration, using the `int:` keys of the Integration profile (§A.7) |
+| All common fields | | |
+
+**`kind` registry** (closed):
+
+| Value | Fires when |
+|---|---|
+| `"interval"` | `interval_secs` have elapsed since the last firing |
+| `"schedule"` | the `cron` expression matches |
+| `"once"` | `at_ms` passes; never again |
+| `"polling"` | a connector reports new items |
+| `"memory"` | grains matching `predicate` appear in this memory |
+| `"webhook"` | the host delivers a payload |
+| `"manual"` | an operator fires it |
+| `"composite"` | `predicate` over `members` is satisfied |
+
+**Normative rules:**
+
+1. **Binding direction.** A Trigger names its Workflow; a Workflow MUST NOT
+   carry a list of triggers. A Workflow is content-addressed, so a plan
+   accumulating trigger references would change address whenever one was added
+   or removed, invalidating every reference to it — including a run's record of
+   which plan it executed.
+2. **Coherence.** A declaration that cannot fire MUST be rejected at write
+   time, not stored: an `interval` or `polling` trigger without a positive
+   `interval_secs`, a `schedule` without `cron`, a `once` without `at_ms`, a
+   `memory` without `predicate`, a `composite` with fewer than two `members` or
+   no `predicate`, or any trigger whose `workflow` is empty. A trigger that can
+   never fire has no symptom other than silence, which is indistinguishable from
+   a source with nothing new.
+3. **Member aliases.** For `composite`, `members` maps an alias to a content
+   address and `predicate` references the **aliases**. A content address is not
+   a legal identifier in an expression grammar, and an alias survives a member
+   being re-declared at a new address.
+4. **`config` carries transport, not identity.** The `int:` keys describe how to
+   reach a connector. A field that determines *whether or when* a trigger fires
+   is a first-class field above, so that it is queryable: implementations index
+   declared fields, not the interior of a `context`-shaped map.
+5. **Evaluation state is not part of the grain.** Next-due time, cursor,
+   lease and failure count are host-local operational state. See §27.8.
+
+**Example — polling an external source:**
+
+```json
+{
+  "type": "trigger",
+  "kind": "polling",
+  "workflow": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+  "connector": "gmail",
+  "scope": "mailbox:accounts@example.com",
+  "enabled": true,
+  "interval_secs": 120,
+  "dedup_key": ["/message_id"],
+  "config": {
+    "int:cursor_field": "since",
+    "int:cursor_type": "timestamp",
+    "int:allowed_outbound_hosts": ["https://gmail.googleapis.com"]
+  },
+  "namespace": "accounting",
+  "created_at": 1740700000000
+}
+```
+
+**Example — a gate over two other triggers:**
+
+```json
+{
+  "type": "trigger",
+  "kind": "composite",
+  "workflow": "b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1",
+  "members": {
+    "invoice": "c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+    "purchase_order": "d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3"
+  },
+  "predicate": {
+    "kind": "and",
+    "left": { "kind": "comparison", "field": "invoice", "comparator": "eq", "value": true },
+    "right": { "kind": "comparison", "field": "purchase_order", "comparator": "eq", "value": true }
+  },
+  "correlate": "/thread_id",
+  "window_ms": 600000,
+  "created_at": 1740700000000
+}
+```
 
 ---
 
@@ -2082,7 +2221,7 @@ Implementations MUST declare which level they support:
 - Deserialize version byte + canonical MessagePack payload
 - Compute and verify SHA-256 content addresses
 - Support field compaction (short keys → full names)
-- Support all twelve standard grain types (0x01–0x0C) per §8 schemas
+- Support all thirteen standard grain types (0x01–0x0D) per §8 schemas
 - Ignore unknown fields
 - Constant-time hash comparison
 
@@ -2118,6 +2257,29 @@ All Level 2 requirements, plus:
 - Crash recovery and reconciliation
 - Policy engine with compliance presets
 - SHOULD partition Observation grain storage by observer domain, inferred from `observer_type`. Physical observer types (see Section 24) SHOULD flow to time-series storage with raw-data retention policies. Cognitive observer types SHOULD flow to vector + relational storage with the same retrieval semantics as Fact grains. Implementations MUST NOT hard-code the domain partition list — treat `observer_type` as an open string and drive routing from configuration or namespace.
+
+### 17.4 Optional modules
+
+Orthogonal to Levels 1–3, some capabilities are optional **modules**: not every
+store performs them, and one that does not is not a lesser implementation.
+Implementing a module means implementing it whole. This mirrors CAL's tier
+modules (CAL §24) — **modules gate operations, not portability.** Interoperability
+rides the `.mg` file: any Level 1 reader can read a memory containing a module's
+grains.
+
+| Module | Requires |
+|---|---|
+| `triggers` | The full execution contract of §27.8, including its idempotency, non-replication and arbitration rules |
+
+An implementation declares its modules alongside its level:
+
+```json
+{ "oms_conformance": 3, "oms_modules": ["triggers"] }
+```
+
+An implementation that stores and replicates Trigger grains without evaluating
+them MUST NOT declare the module. Storing them is ordinary grain handling and
+needs no declaration; *acting* on them is what the contract governs.
 
 ---
 
@@ -2950,109 +3112,41 @@ Scientific and legal workflows cite external artifacts outside the OMS hash spac
 
 The `derived_from` field SHOULD accept both OMS content addresses and external citation objects.
 
-### 27.6 Trigger Definitions via Observation Grains
+### 27.6 Trigger Definitions via Observation Grains — **REMOVED in 1.6**
 
-Triggers observe external systems for changes (new events, incoming webhooks, scheduled intervals). This maps naturally to the Observation grain (type 0x06) — triggers are observers. No new grain type is required; existing Observation fields accommodate trigger definitions through the following convention.
+Superseded by the **Trigger grain type (§8.13)**.
 
-**Field mapping for triggers:**
+This section described a convention in which a trigger was an Observation grain
+with `observer_type: "trigger:*"` and its configuration in the `context` map
+under `int:` keys, on the reasoning that *"existing Observation fields
+accommodate trigger definitions"*. That premise proved false three ways, and the
+section is removed rather than deprecated: preserving text that instructs
+implementers to write non-conformant grains is worse than removing it.
 
-| Observation Field | Trigger Usage |
-|---|---|
-| `observer_id` | Connector name (e.g., `"github"`, `"stripe"`) |
-| `observer_type` | Trigger mechanism: `"trigger:polling"`, `"trigger:webhook"`, `"trigger:schedule"`, `"trigger:listener"` |
-| `observation_mode` | `"periodic"` (polling), `"continuous"` (webhook/listener), `"scheduled"` (cron) |
-| `observation_scope` | What is being watched (e.g., `"repos/{owner}/{repo}/issues"`) |
-| `context` | Trigger-specific configuration using `int:` prefixed fields from the Integration profile (§A.7) |
+1. **It was non-conformant against this specification's own closed enums.** It
+   placed `"periodic"` / `"continuous"` / `"scheduled"` in `observation_mode`,
+   which §25 declares **closed** over `passive | active | reflective |
+   real_time`, and a watch target such as `"repos/{owner}/{repo}/issues"` in
+   `observation_scope`, which §26 declares **closed** over the *temporal
+   breadth* values `point | interval | session | longitudinal`. Every example the
+   section carried would be rejected by a Level 2 implementation enforcing §25
+   and §26.
+2. **Configuration in `context` could not be queried.** `context` is not among
+   Observation's queryable fields, and field resolution is top-level; a filter on
+   an `int:` key inside it cannot be pushed down. Moving the keys to the top
+   level would make them queryable but places them outside `context`, which is
+   where §A.7 says `int:` fields live. The two requirements were mutually
+   exclusive.
+3. **A trigger is not an observation.** §24 partitions observers into Physical
+   ("measurements of the material world") and Cognitive ("observations of the
+   information space"). A standing rule is neither, and registering `trigger:*`
+   would have required inventing a third domain solely to make the
+   classification hold.
 
-Implementations MAY index Observation grains whose `observer_type` starts with `"trigger:"` to provide trigger catalog queries.
-
-**Example — Polling trigger:**
-
-```json
-{
-  "type": "observation",
-  "observer_id": "github",
-  "observer_type": "trigger:polling",
-  "observation_mode": "periodic",
-  "observation_scope": "repos/{owner}/{repo}/issues",
-  "structural_tags": ["profile:integration"],
-  "namespace": "axtion:connectors:github",
-  "context": {
-    "int:http_method": "GET",
-    "int:http_path": "/repos/{owner}/{repo}/issues",
-    "int:path_params": ["owner", "repo"],
-    "int:poll_interval_secs": 300,
-    "int:cursor_field": "since",
-    "int:cursor_type": "timestamp",
-    "int:connector": "github",
-    "int:config_schema": {
-      "type": "object",
-      "properties": {
-        "owner": {"type": "string"},
-        "repo": {"type": "string"},
-        "labels": {"type": "string"}
-      },
-      "required": ["owner", "repo"]
-    },
-    "int:event_schema": {
-      "type": "object",
-      "properties": {
-        "id": {"type": "integer"},
-        "title": {"type": "string"},
-        "state": {"type": "string"}
-      }
-    }
-  },
-  "created_at": 1740700000000
-}
-```
-
-**Example — Webhook trigger:**
-
-```json
-{
-  "type": "observation",
-  "observer_id": "stripe",
-  "observer_type": "trigger:webhook",
-  "observation_mode": "continuous",
-  "observation_scope": "payment_intent.succeeded",
-  "structural_tags": ["profile:integration"],
-  "namespace": "axtion:connectors:stripe",
-  "context": {
-    "int:webhook_path": "/webhooks/stripe/{token}",
-    "int:webhook_secret_header": "Stripe-Signature",
-    "int:connector": "stripe",
-    "int:event_schema": {
-      "type": "object",
-      "properties": {
-        "id": {"type": "string"},
-        "amount": {"type": "integer"},
-        "currency": {"type": "string"}
-      }
-    }
-  },
-  "created_at": 1740700000000
-}
-```
-
-**Example — Scheduled trigger:**
-
-```json
-{
-  "type": "observation",
-  "observer_id": "scheduler",
-  "observer_type": "trigger:schedule",
-  "observation_mode": "scheduled",
-  "observation_scope": "daily-report",
-  "structural_tags": ["profile:integration"],
-  "context": {
-    "int:cron_expression": "0 9 * * MON-FRI",
-    "int:timezone": "America/New_York",
-    "int:connector": "scheduler"
-  },
-  "created_at": 1740700000000
-}
-```
+Migration: a trigger Observation becomes a Trigger grain (§8.13). `observer_id`
+becomes `connector`, the `trigger:*` suffix becomes `kind`, the watch target
+becomes `scope`, and the cadence keys become first-class fields. `int:` keys
+that genuinely describe connector transport stay in `config`.
 
 ### 27.7 Consensus Grain Usage for Tool Definition Validation
 
@@ -3088,6 +3182,71 @@ When multiple independent sources produce or validate the same Tool definition g
   "created_at": 1740700000000
 }
 ```
+
+---
+
+### 27.8 Trigger Execution Contract
+
+§8.13 defines what a trigger *is*. This section defines what an implementation
+that evaluates one MUST do. Declaring the shape without the contract was the
+gap that made the removed §27.6 unimplementable in an interoperable way: nothing
+normative said what evaluates a declaration, what a firing produces, or what
+idempotency a twice-delivered item receives.
+
+An implementation that evaluates triggers declares the `triggers` module (§17.4).
+One that does not MAY store and replicate Trigger grains without acting on them;
+they are ordinary grains.
+
+**1. Firing MUST be journaled.** Each firing writes a record naming the trigger,
+what it produced, and what it skipped. A trigger that has never fired MUST be
+distinguishable from one that has fired and found nothing — otherwise a
+misconfigured trigger and an idle one look identical, and the misconfiguration
+has no symptom.
+
+**2. Ingestion MUST be idempotent on the declared `dedup_key`.** The same item
+seen twice — connector replay, overlapping cursors, two evaluators racing — MUST
+produce one unit of work and a recorded skip, never two. Implementations SHOULD
+derive the work identity from `(connector, dedup value)` rather than the dedup
+value alone; following CloudEvents, an `id` is unique only within a producer, so
+two connectors sharing an id space would otherwise collide.
+
+**3. First evaluation MUST NOT replay history.** A newly declared `polling`
+trigger records the source's current position and fires nothing. Without this,
+declaring a trigger over an established source starts work for its entire
+history.
+
+**4. An absent baseline means different things for different kinds.** A trigger
+with no recorded next-due time has never been evaluated. For a *relative*
+cadence (`interval`, `polling`) that means it is due now — there is nothing to
+wait out. For an *absolute* schedule (`schedule`, `once`) it does NOT: the
+trigger is due at the instant it names, and an implementation MUST NOT fire a
+`cron` of `0 9 * * *` merely because it was just declared. A `once` trigger MUST
+fire at most once; "no next instant" MUST be represented distinctly from "no
+baseline yet", or it re-fires indefinitely.
+
+**5. Evaluation state MUST NOT replicate.** Next-due time, source cursor, lease
+and failure count are host-local. Replicating them lets two hosts sharing a
+memory each defer to the other's watermark, and lets a memory restored into a
+different environment inherit a cursor and silently skip work it should have
+done. This is the mirror of §8.12's rule that *governance* state must replicate:
+a record of who did what has to travel with the file; a record of where one host
+had got to must not.
+
+**6. Concurrent evaluation MUST be arbitrated by the store.** Where several
+evaluators can reach one memory, claiming MUST be a conditional write, and an
+evaluator whose claim has expired MUST NOT be able to write behind whichever
+one succeeded it. Losing a claim is a normal outcome and MUST NOT be reported as
+an error.
+
+**7. Failure MUST back off.** A connector that fails repeatedly MUST have its
+next evaluation deferred, and the reason MUST be inspectable. An implementation
+MUST NOT retry a failing source at its declared cadence.
+
+**8. Calendar semantics MUST be stated, not assumed.** Implementations disagree
+about a `cron` occurrence falling in a daylight-saving gap — some skip it, some
+fire it immediately — and agree only on the repeated hour, where it fires once.
+An implementation MUST document which it does, and SHOULD refuse a timezone it
+would mishandle rather than fire at the wrong hour and be believed.
 
 ---
 
@@ -3508,7 +3667,7 @@ Applies to grains that represent REST API connectors, tool catalog entries, webh
 | `int:sunset_date` | string | no | ISO 8601 date when this action will be removed |
 | `int:content_type` | string | no | Request content type if non-default (e.g., `"application/x-www-form-urlencoded"`) |
 
-**Trigger-specific fields** (used in Observation grains with `observer_type` starting with `"trigger:"`; see §27.6):
+**Trigger-specific fields** (connector transport configuration on a Trigger grain's `config` map, §8.13):
 
 | Field | Type | Used By | Description |
 |---|---|---|---|
@@ -3521,6 +3680,7 @@ Applies to grains that represent REST API connectors, tool catalog entries, webh
 | `int:timezone` | string | schedule | IANA timezone (e.g., `"America/New_York"`) |
 | `int:config_schema` | map | all | JSON Schema for trigger configuration |
 | `int:event_schema` | map | all | JSON Schema for emitted events |
+| `int:allowed_outbound_hosts` | string[] | all | URL prefixes a connector may reach. Scheme, host and port all take part in the match; `*.example.com` covers subdomains but not the apex. An absent key is unrestricted; an empty array denies everything — the two are different statements. A bare `*` SHOULD be refused: it lets a declaration appear policed while permitting every destination |
 
 **Normative:**
 - Grains with `"profile:integration"` SHOULD include `int:connector` and `int:auth_type`.
@@ -3891,7 +4051,31 @@ footer        = 32OCTET  ; SHA-256 checksum
   "icron": "int:cron_expression",
   "itz": "int:timezone",
   "icfg": "int:config_schema",
-  "ievt": "int:event_schema"
+  "ievt": "int:event_schema",
+  "iaoh": "int:allowed_outbound_hosts"
+}
+```
+
+**Trigger-Specific Fields (§8.13):**
+
+```json
+{
+  "aknd": "kind",
+  "twf": "workflow",
+  "tcon": "connector",
+  "tscp": "scope",
+  "tena": "enabled",
+  "tdk": "dedup_key",
+  "tint": "interval_secs",
+  "tcron": "cron",
+  "tat": "at_ms",
+  "tpred": "predicate",
+  "tmem": "members",
+  "tcorr": "correlate",
+  "twin": "window_ms",
+  "tconc": "concurrency",
+  "tcatch": "catchup",
+  "tcfg": "config"
 }
 ```
 

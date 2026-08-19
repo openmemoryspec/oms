@@ -9,7 +9,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16)
+## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19)
+
+### Added in the trigger batch (2026-08-19)
+
+- **OMS §8.13 Trigger (type `0x0D`)**: a standing rule that starts a Workflow —
+  interval, calendar schedule, one-shot, polling an external source, a condition
+  over this memory, a host-delivered webhook, a manual dispatch, or a boolean
+  gate over other triggers. Typed, queryable fields; connector transport
+  configuration stays in `config` under the §A.7 `int:` keys. Binding is
+  normatively **trigger → workflow**: a Workflow is content-addressed, so a plan
+  accumulating trigger references would change address whenever one was added.
+- **OMS §27.8 Trigger Execution Contract**: what an implementation that
+  *evaluates* triggers must do — journal every firing, deduplicate on the
+  declared key, seed rather than replay history on first evaluation, keep
+  evaluation state host-local, arbitrate concurrent evaluation through the
+  store, back off on failure, and state its DST semantics rather than assume
+  them. Answers `openmemoryspec/oms#12 §4`.
+- **OMS §17.4 Optional modules** and the `triggers` module declaration,
+  mirroring CAL's tier modules: modules gate operations, not portability.
+- **§A.7 `int:allowed_outbound_hosts`**: the destinations a connector may reach.
+- **CAL: `RECALL triggers`** — the closed grain-type set grows to 13, with a
+  queryable field set (`kind`, `workflow`, `connector`, `scope`, `enabled`,
+  `cron`).
+
+### Removed in the trigger batch (2026-08-19)
+
+- **OMS §27.6 "Trigger Definitions via Observation Grains"** — removed, not
+  deprecated. It was non-conformant against this specification's own closed
+  enums (§25 `observation_mode`, §26 `observation_scope`), its `context`-carried
+  configuration could not be queried, and §24's observer domains have no bucket a
+  standing rule belongs in. Keeping text that instructs implementers to write
+  invalid grains is worse than removing it. §8.13 replaces it, and §27.6 carries
+  a migration note.
+- **`Workflow.trigger` (§8.4)** — **breaking.** A free-text "activation
+  condition" that no implementation evaluated, so it described an activation
+  that could not activate anything. Old blobs are unaffected: an unknown field
+  is preserved and ignored (§19.4). CAL's `ON "…"` clause on `ADD`/`SUPERSEDE
+  workflow` goes with it; `ON` remains a keyword, used by `GRANT`/`REVOKE`.
 
 ### Added in the anonymization batch (2026-08-16)
 

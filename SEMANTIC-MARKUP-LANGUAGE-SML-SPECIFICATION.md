@@ -1,6 +1,6 @@
 # SML (Semantic Markup Language) Specification v1.1
 
-**Status:** Standards Track | **Date:** 2026-08-03 | **Version:** 1.1 | **Classification:** Experimental
+**Status:** Standards Track | **Date:** 2026-08-19 | **Version:** 1.2 | **Classification:** Experimental
 **Part of:** [Open Memory Specification (OMS) v1.5](./SPECIFICATION.md)
 
 ---
@@ -10,7 +10,7 @@
 - [Abstract](#abstract)
 1. [What is SML?](#1-what-is-sml)
 2. [Structural Rules](#2-structural-rules)
-3. [Comprehensive Example — All 12 Grain Types](#3-comprehensive-example--all-12-grain-types)
+3. [Comprehensive Example — All 13 Grain Types](#3-comprehensive-example--all-13-grain-types)
 4. [Progressive Disclosure](#4-progressive-disclosure)
 - [Appendix A: Relationship to CAL](#appendix-a-relationship-to-cal)
 - [Appendix B: Version History](#appendix-b-version-history)
@@ -58,7 +58,7 @@ The formatted output uses a **flat, semantic structure**:
 
 ---
 
-## 3. Comprehensive Example — All 12 Grain Types
+## 3. Comprehensive Example — All 13 Grain Types
 
 The following example shows a single assembled context covering every grain type. The scenario: an agent helping alice prepare her Q1 engineering review.
 
@@ -87,7 +87,7 @@ The following example shows a single assembled context covering every grain type
 
   <state context="q1_review_prep">outlining slides: 1. headline metrics  2. incident retrospective  3. velocity trend  4. Q2 goals</state>
 
-  <workflow trigger="review_prep_requested">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>
+  <workflow name="review prep">retrieve_metrics -> identify_narrative -> draft_outline -> populate_data -> send_for_review</workflow>
 
   <consensus threshold="3" count="4">Q1 deployment frequency improved 18% over Q4 2025</consensus>
 
@@ -96,6 +96,8 @@ The following example shows a single assembled context covering every grain type
   <skill name="metrics_review" proficiency="0.82" domain="software">summarise quarterly engineering metrics and surface the reliability narrative</skill>
 
   <recommendation target="entity:alice/velocity" severity="low">consolidate 2 duplicate "week 8 velocity" observations into one</recommendation>
+
+  <trigger kind="polling" scope="mailbox:accounts@example.com">poll the accounting mailbox every 2 minutes for invoices</trigger>
 
 </context>
 ```
@@ -133,6 +135,7 @@ See the [CAL specification](./CONTEXT-ASSEMBLY-LANGUAGE-CAL-SPECIFICATION.md) fo
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2 | 2026-08-19 | Adds the `<trigger>` element for the Trigger grain type (`0x0D`), introduced in OMS v1.6 — rendering what a standing rule watches, with `kind` and `scope` attributes — and extends the comprehensive example to all 13 grain types. Additive: every SML 1.1 document remains a valid SML 1.2 document. |
 | 1.1 | 2026-08-03 | Adds the `<recommendation>` element for the Recommendation grain type (`0x0C`), introduced in OMS v1.5 — rendering the proposal summary with `target`, `severity` and `analyzer` attributes — and extends the comprehensive example to all 12 grain types. Additive: every SML 1.0 document remains a valid SML 1.1 document. |
 | 1.0 | 2026-03-03 | Initial standalone specification, decoupled from CAL. Eleven grain-type elements, structural rules, and progressive disclosure levels. |
 
