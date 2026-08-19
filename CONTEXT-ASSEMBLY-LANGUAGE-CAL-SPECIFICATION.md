@@ -236,7 +236,7 @@ ORDER, BY, ASC, DESC, WITH, EXPLAIN, SCOPE,
 UNION, INTERSECT, EXCEPT,
 SELECT, COUNT, FIRST, GROUP, SUBJECTS, OBJECTS, HASHES, PROJECT,
 INCLUDE, EXCLUDE, IS, NULL, TRUE, FALSE,
-EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE,
+EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE, REPORT,
 ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, AS,
 FOR, FROM, BUDGET, PRIORITY, FORMAT,
 LET, THREAD,
@@ -267,6 +267,8 @@ QUERY, QUERIES, DESCRIPTION, DROP                         -- definition surface 
 (§8.16) and `RUN "<name>"` (§8.18.3). A saved query name is a **string
 literal**, so the two never collide -- `LOOP` is a keyword and can never be a
 quoted name.
+
+`SUBJECT` is shared: `FORGET SUBJECT` is Tier 2, and `REPORT SUBJECT` (§8.19) is the Tier-0 read over the same selector. `REPORT` itself is a Tier-0 keyword -- disclosure is a read at every tier, and a host that has disabled destruction still answers access requests.
 
 `BECAUSE` was already an alias of `REASON` in `reason_clause`; Tier 2/3 statements conventionally write `BECAUSE`, and this specification uses that spelling for them throughout. `DEFINE ROLE` is **reserved but not specified** in 1.3 -- role bundles are deferred to a future revision; the 1.3 grant surface is verbs-only.
 
@@ -341,7 +343,7 @@ extractor       = "SUBJECTS" | "OBJECTS" | "HASHES" ;
 
 statement       = explain_stmt | recall_stmt | assemble_stmt | set_stmt
                 | exists_stmt | history_stmt | describe_stmt | batch_stmt
-                | coalesce_stmt | run_query_stmt
+                | coalesce_stmt | run_query_stmt | report_subject_stmt
                 | add_stmt | supersede_stmt | revert_stmt
                 | forget_stmt | purge_stmt                        (* Tier 2 *)
                 | grant_stmt | revoke_stmt | show_grants_stmt     (* Tier 3 *)
@@ -562,6 +564,9 @@ evolve_field    = "object" | "confidence" | "importance" | "tags" ;
 reason_clause   = ( "REASON" | "BECAUSE" ) , string_literal ;
 
 (* --- Tier 2: Destroy (new in 1.3) --- *)
+
+(* Tier 0: the read-only mirror of FORGET SUBJECT -- §8.19 *)
+report_subject_stmt = "REPORT" , "SUBJECT" , string_literal , [ with_clause ] ;
 
 forget_stmt     = "FORGET" , ( hash_literal | parameter ) , [ reason_clause ]
                 | "FORGET" , "SUBJECT" , string_literal ,
@@ -1747,6 +1752,49 @@ find what it may `RUN`.
 
 `DESCRIBE capabilities` SHOULD report saved-query support and the limits of
 §8.18.2.
+
+
+### 8.19 REPORT SUBJECT (Tier 0 -- new in 1.3)
+
+The read-only mirror of `FORGET SUBJECT`: the same selection, disclosed instead
+of destroyed. It is the in-language answer to GDPR Art. 15 (access) and Art. 20
+(portability), and the safe rehearsal for an erasure.
+
+```sql
+REPORT SUBJECT "pat"
+REPORT SUBJECT "pat" WITH text_mentions
+```
+
+**One selector, two verbs.** `REPORT SUBJECT <id>` MUST select exactly the set
+`FORGET SUBJECT <id>` would erase, through the same code path and the same
+indexes (OMS §28.4.4 rule 3) -- the identity, its partition-style derived keys,
+grains carrying it in either triple position, its thread and run records, and
+under `WITH text_mentions` its indexed text mentions. `WITH text_mentions`
+carries the same hard precondition on both statements: where the text index is
+absent or incomplete the statement MUST refuse rather than return a quietly
+partial answer.
+
+Sharing the selector is the point. It makes "show me everything you hold, then
+delete it" two statements over one set, and it means a disclosure cannot
+promise less than an erasure removes or more than it reaches.
+
+**It is a read, and it is classified as one.** `REPORT SUBJECT` requires the
+`read` verb, not `erase`. It MUST NOT sit behind whatever process-level cap
+disables destructive operations: a deployment that has turned destruction off
+still owes data subjects access, and coupling the two would make an
+implementation choose between refusing erasure and refusing disclosure.
+
+**It writes nothing.** No audit Observation, no grain of any kind. Tier 2 writes
+an audit record because destruction is irreversible and its record must outlive
+it (§8.14.4); an access request destroys nothing and needs no such record. A
+host that logs access does so in host logs, not in memory -- and an audit grain
+naming the subject of a DSAR would itself become personal data about that
+subject, in an immutable replicating store.
+
+**Result.** The response carries every matched identity string (so the requester
+can see *which* keys matched, including derived ones) and the selected grains.
+Hosts SHOULD also offer the result as a portable export, since Art. 20 asks for
+a machine-readable form rather than a rendering.
 
 
 ---
@@ -3040,10 +3088,10 @@ CAL queries execute through the same read path as all other interfaces. No CAL s
 
 ### 19.2 GDPR Implications
 
-- **Art. 15 (Right of Access):** CAL enables DSAR via `RECALL WHERE user_id = "alice" COUNT`
+- **Art. 15 (Right of Access):** `REPORT SUBJECT "<id>"` (Tier 0, `read` verb, §8.19) -- the erasure selector in disclose-mode, so the answer matches what an erasure would remove.
 - **Art. 16 (Right to Rectification):** CAL SUPERSEDE enables correction of inaccurate personal data.
 - **Art. 17 (Right to Erasure):** Expressible in-language since 1.3 -- `FORGET SUBJECT <id> BECAUSE "..."` (Tier 2, `erase` verb, audited, one-way; §8.14). Hosts without Tier 2 continue to serve erasure via implementation-specific APIs.
-- **Art. 20 (Data Portability):** CAL can serve as query interface for exports.
+- **Art. 20 (Data Portability):** `REPORT SUBJECT` (§8.19), whose result hosts SHOULD offer as a portable export.
 - **Art. 25 (By Design):** Grammar-level safety qualifies as "by design" protection.
 
 ### 19.3 HIPAA Implications
@@ -3687,7 +3735,7 @@ EXISTS, HISTORY, DESCRIBE, BATCH, COALESCE,
 ABOUT, RECENT, SINCE, LIKE, MY, CONTRADICTIONS, AS,
 FOR, FROM, BUDGET, PRIORITY, FORMAT,
 LET, THREAD, DIFF,
-ADD, SUPERSEDE, REVERT, SET, REASON, BECAUSE, REHYDRATE,
+ADD, SUPERSEDE, REVERT, SET, REASON, BECAUSE, REHYDRATE, REPORT,
 FORGET, PURGE, SUBJECT, OLDER, THAN, TYPE,
 GRANT, REVOKE, ON, TO, SHOW, GRANTS, PRINCIPAL,
 APPROVE, REJECT, APPLY, ROLLBACK, RUN, LOOP, FULL,

@@ -3529,6 +3529,69 @@ the two are indistinguishable by address — that is what content addressing
 means. Implementations SHOULD document this window rather than describe
 reclamation as unconditional.
 
+### 28.4.4 Subject reachability (new in 1.6)
+
+CAL §8.14 defines the erasure selector (`FORGET SUBJECT "<id>"`) and §8.14 its
+read-only mirror (`REPORT SUBJECT`), and prior revisions said what those
+statements *mean* without ever saying what they must **reach**. That gap is not
+academic. It was found in a conforming implementation as a silent
+under-erasure:
+
+> A grain carrying a `subject` but asserting no relation or object — an Event
+> *about* a person, a message, an entity — reached no structural index at all,
+> because the index required a complete triple. Both `FORGET SUBJECT` and
+> `REPORT SUBJECT` select through that index. So the identity's own transcript
+> survived an erasure **that reported success**, and went undisclosed in a DSAR
+> **that reported completeness**. Nothing in this specification made that
+> non-conformant.
+
+An implementation must not be able to pass conformance while silently
+under-erasing. The following are therefore normative.
+
+1. **Reachability is a property of the identity, not of grain shape.** Subject
+   selection MUST reach **every** grain whose `subject` matches the identity,
+   regardless of grain type and regardless of whether the grain also carries a
+   relation or an object. An implementation whose index requires a complete
+   triple MUST index subject-only grains by some other means rather than
+   omitting them.
+2. **Reach extends to the identity's derived keys.** Selection MUST also reach
+   grains that carry the identity in the `object` position (over-reach is the
+   safe direction for erasure), grains whose `session_id` or `run_id` **is** the
+   identity or is a partition-style key carrying it as a boundary-guarded
+   prefix, and — where the host offers text-mention matching — grains whose
+   indexed text mentions it.
+3. **Erasure and disclosure MUST share one selector.** The set a DSAR discloses
+   and the set an erasure removes MUST be computed by the same code path over
+   the same indexes. Two selectors drift, and a drift in this pair means either
+   disclosing what was not erased or erasing what was never disclosed. This is
+   the property that lets an implementation answer "what would you delete?"
+   honestly before deleting anything.
+4. **A selector that cannot reach a class of grains MUST NOT report success.**
+   An erasure or report whose scope is known-incomplete MUST surface that —
+   whether because a text index is absent, an index version predates a
+   reachability fix, or a grain class is not indexed at all. Reporting a count
+   without reporting the limitation is the failure mode this section exists to
+   forbid.
+5. **A reachability fix MUST heal existing memories.** Grains written before the
+   fix are already in the file and are exactly the ones at risk, so an
+   implementation MUST rebuild the affected index (an index-version stamp
+   checked at open is sufficient) rather than only indexing correctly from the
+   fix forward. A rebuild MUST reconstruct supersession state, so healing
+   neither duplicates a grain nor resurrects a superseded one.
+6. **Residual limits MUST be documented, not implied.** Text-mention matching
+   reaches exactly what the text index reaches; identifiers the tokenizer splits
+   differently are matched only through structured references; an identifier
+   appearing only inside an opaque body field is not reachable by any structural
+   selector. Implementations MUST state which of these apply rather than
+   describe erasure as exhaustive.
+
+**Conformance.** An implementation claiming subject erasure or subject
+disclosure MUST include, in its conformance suite, a case that stores a grain
+carrying **only** a subject — no relation, no object — and asserts that it
+appears in the subject report and is gone after the subject erasure. The case
+exists specifically because that grain shape is the one a triple-shaped index
+loses, and because both operations reported success while failing on it.
+
 ### 28.5 Agent Capability Convention
 
 Agents that participate in multi-agent systems SHOULD advertise their capabilities by writing a Fact grain with the `mg:has_capability` relation to the `"agent:identity"` namespace. This grain serves as the OMS equivalent of an A2A Agent Card or MCP server capability declaration.

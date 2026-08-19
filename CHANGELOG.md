@@ -9,7 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 ---
 
-## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query, template-identity and blob-lifecycle batches 2026-08-19)
+## [1.6-draft] — 2026-08-10 (RFC, open for comment; anonymization batch added 2026-08-16, trigger batch 2026-08-19, saved-query, template-identity, blob-lifecycle and subject-reachability batches 2026-08-19)
 
 ### Added in the saved-query batch (2026-08-19)
 
@@ -44,6 +44,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
   the nearest available proxy for that property — this revision replaces the
   proxy with the property. `UNDEFINE` stays reserved and unspecified rather than
   becoming a second spelling; implementations MUST NOT accept it as an alias.
+
+### Added in the subject-reachability batch (2026-08-19)
+
+- **OMS §28.4.4 Subject reachability** — prior revisions defined the erasure
+  selector without ever saying what it must **reach**, and a conforming
+  implementation was found to under-erase silently because of it: a grain
+  carrying a `subject` but no relation or object reached no structural index, so
+  the identity's own transcript survived an erasure **that reported success**
+  and went undisclosed in a DSAR **that reported completeness**. Now normative:
+  reachability is a property of the identity, not of grain shape; reach extends
+  to object position, session/run keys and partition-key derivatives; **erasure
+  and disclosure MUST share one selector**; a known-incomplete scope MUST NOT
+  report success; a reachability fix MUST heal existing memories by index
+  rebuild rather than only indexing correctly going forward; residual limits
+  MUST be documented. Carries a **required conformance case** — store a grain
+  with only a subject, assert it is reported and then erased. Answers
+  `openmemoryspec/oms#12 §6`.
+- **CAL §8.19 `REPORT SUBJECT`** — the read-only mirror of `FORGET SUBJECT`,
+  and the statement §28.4.4 rule 3 is about. Tier 0, `read` verb, same selector
+  and same `WITH text_mentions` precondition as the erasure. It MUST NOT sit
+  behind the cap that disables destructive operations — a deployment that turned
+  destruction off still owes data subjects access — and it writes **no** audit
+  grain: access destroys nothing, and an audit grain naming the subject of a
+  DSAR would itself be personal data about them in an immutable replicating
+  store. GDPR Art. 15/20 in §19.2 now point at it instead of at a `RECALL`
+  approximation.
 
 ### Added in the blob-lifecycle batch (2026-08-19)
 
